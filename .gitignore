@@ -1,0 +1,21 @@
+# PGDD
+.pgdd/*.bak
+.pgdd/sparring-touched.log
+
+# Node
+node_modules/
+dist/
+*.log
+
+# 環境変数・秘密情報（コミット禁止）
+.env
+.env.local
+
+# Terraform（コミット禁止: 状態・プロバイダキャッシュ・変数本体）
+*.tfstate
+*.tfstate.*
+.terraform/
+terraform.tfvars
+
+# Coverage レポート（生成物）
+coverage/

@@ -1,0 +1,370 @@
+{
+  "phases": [
+    {
+      "id": "requirements",
+      "name": "要件確認・MVP確定",
+      "allow": [
+        "RDD.md",
+        "BUILDLOG.md",
+        "NEXTSTEP.md"
+      ],
+      "block": [
+        "frontend/",
+        "backend/",
+        "terraform/"
+      ],
+      "completionCondition": {
+        "description": "RDD.md を Agent.md 3.5節の開発前チェックリスト（プロジェクト名・MVP範囲・除外機能・セッション/状態モデル・認証有無・技術スタック・デプロイ先など）と照合し、不足項目をユーザー確認して確定。RDD.md に MVP範囲・除外機能が明記され、BUILDLOG.md に完了エントリ、NEXTSTEP.md が次フェーズを指すこと。",
+        "verify": "grep -q 'MVP' RDD.md && grep -q '\\[requirements\\] 完了' BUILDLOG.md && grep -q '現在: Phase 2' NEXTSTEP.md"
+      },
+      "adversaryReview": true,
+      "reviewScope": [
+        "RDD.md"
+      ]
+    },
+    {
+      "id": "environment",
+      "name": "環境構築（ツール確認）",
+      "allow": [
+        "BUILDLOG.md",
+        "NEXTSTEP.md",
+        ".gitignore"
+      ],
+      "block": [
+        "frontend/",
+        "backend/",
+        "terraform/",
+        "RDD.md"
+      ],
+      "completionCondition": {
+        "description": "Node.js / Docker / Terraform / build-essential(python3) が利用可能なこと。node-pty のネイティブビルドに必要なツールチェーンが揃い、Docker デーモンが起動していること。.gitignore に *.tfstate / .terraform/ / .env / terraform.tfvars を登録。",
+        "verify": "node --version && docker --version && terraform version && grep -q '\\.tfstate' .gitignore && grep -q '\\[environment\\] 完了' BUILDLOG.md && grep -q '現在: Phase 3' NEXTSTEP.md"
+      },
+      "adversaryReview": false
+    },
+    {
+      "id": "scaffold",
+      "name": "プロジェクト雛形生成",
+      "allow": [
+        "frontend/",
+        "backend/",
+        "terraform/",
+        "BUILDLOG.md",
+        "NEXTSTEP.md",
+        ".gitignore"
+      ],
+      "block": [
+        "RDD.md"
+      ],
+      "completionCondition": {
+        "description": "frontend（Vite + React-TS + Tailwind + shadcn/ui + xterm）、backend（Express + ws + node-pty + TypeScript）、terraform/ の骨子が生成され、各 package.json / tsconfig / main.tf が存在。ロックファイルが生成され、TypeScript が型エラーなくコンパイル可能なこと。",
+        "verify": "test -f frontend/package.json && test -f backend/package.json && test -f backend/tsconfig.json && test -f terraform/main.tf && test -f terraform/terraform.tfvars.example && grep -q '\\[scaffold\\] 完了' BUILDLOG.md && grep -q '現在: Phase 4' NEXTSTEP.md"
+      },
+      "adversaryReview": false
+    },
+    {
+      "id": "backend",
+      "name": "バックエンド実装（PTY/WS/状態判定）",
+      "allow": [
+        "backend/",
+        "BUILDLOG.md",
+        "NEXTSTEP.md"
+      ],
+      "block": [
+        "frontend/",
+        "terraform/",
+        "RDD.md"
+      ],
+      "completionCondition": {
+        "description": "PTYセッション管理（任意数起動・os.platform() でシェル判定・プロセス永続化）、WebSocket中継、状態判定（Running/Idle/Waiting Input、正規表現の軽量化）、REST API を実装。TypeScript ビルドが通り、全テストが GREEN（80%カバレッジ目標）であること。",
+        "verify": "cd backend && npm run build && npm test && cd .. && grep -q '\\[backend\\] 完了' BUILDLOG.md && grep -q '現在: Phase 5' NEXTSTEP.md"
+      },
+      "adversaryReview": true,
+      "reviewScope": [
+        "backend/src/"
+      ]
+    },
+    {
+      "id": "frontend",
+      "name": "フロントエンド実装（xterm/レイアウト/状態可視化）",
+      "allow": [
+        "frontend/",
+        "BUILDLOG.md",
+        "NEXTSTEP.md"
+      ],
+      "block": [
+        "backend/",
+        "terraform/",
+        "RDD.md"
+      ],
+      "completionCondition": {
+        "description": "ターミナルパネル（xterm.js + WebGLアドオン）、動的レイアウト（縦横分割・グリッド・境界線ドラッグ）、状態可視化（青パルス/黄発光/緑境界線の Tailwind 動的クラス）、テーマ設定UI、Context API 状態管理を実装。ビルドが通り、全テストが GREEN であること。",
+        "verify": "cd frontend && npm run build && npm test && cd .. && grep -q '\\[frontend\\] 完了' BUILDLOG.md && grep -q '現在: Phase 6' NEXTSTEP.md"
+      },
+      "adversaryReview": true,
+      "reviewScope": [
+        "frontend/src/"
+      ]
+    },
+    {
+      "id": "iac-integration",
+      "name": "IaC・統合検証",
+      "allow": [
+        "terraform/",
+        "backend/Dockerfile",
+        "frontend/Dockerfile",
+        "BUILDLOG.md",
+        "NEXTSTEP.md"
+      ],
+      "block": [
+        "RDD.md"
+      ],
+      "completionCondition": {
+        "description": "Dockerfile×2 と terraform 構成が完成し、terraform validate / fmt が通過。terraform apply で backend/frontend の2コンテナが Up になり、WebSocket疎通・複数ターミナル・レイアウト変更・状態色切替・リロード復元が動作すること（apply検証は手動、BUILDLOG.md に結果を記録）。",
+        "verify": "cd terraform && terraform init -backend=false && terraform validate && terraform fmt -check && cd .. && grep -q '\\[iac-integration\\] 完了' BUILDLOG.md && grep -q '現在: Phase 7' NEXTSTEP.md"
+      },
+      "adversaryReview": true,
+      "reviewScope": [
+        "terraform/",
+        "backend/Dockerfile",
+        "frontend/Dockerfile"
+      ]
+    },
+    {
+      "id": "docs",
+      "name": "ドキュメント整備",
+      "allow": [
+        "README.md",
+        "BUILDLOG.md",
+        "NEXTSTEP.md"
+      ],
+      "block": [
+        "frontend/",
+        "backend/",
+        "terraform/",
+        "RDD.md"
+      ],
+      "completionCondition": {
+        "description": "README.md（概要・セットアップ手順・技術スタック）が生成され、BUILDLOG.md が完成状態であること。",
+        "verify": "test -f README.md && grep -q 'セットアップ' README.md && grep -q '\\[docs\\] 完了' BUILDLOG.md && grep -q '全フェーズ完了' NEXTSTEP.md"
+      },
+      "adversaryReview": false
+    },
+    {
+      "id": "requirements-v2",
+      "name": "v2要件確定（RDD改訂：rename除外解除・フォント/シェル要件追記）",
+      "allow": [
+        "RDD.md",
+        "BUILDLOG.md",
+        "NEXTSTEP.md"
+      ],
+      "block": [
+        "frontend/",
+        "backend/",
+        "terraform/"
+      ],
+      "completionCondition": {
+        "description": "RDD.md を改訂し、6章の除外機能から『セッション名の変更』を削除、2章/5章にv2要件を追記すること。追記内容: (1)フォント設定=等幅プリセット選択＋10〜20pxサイズ・localStorage保存・全ターミナル即時反映、(2)シェル選択=GET /api/shells でバックエンド検出一覧を返し POST /api/sessions は許可リスト内のみ受理・許可リスト外/任意パスは400（セキュリティ要件）、(3)セッション名変更=PATCH /api/sessions/:id・1〜30文字・制御文字禁止バリデーション。7章のSessionモデルの『タイトル変更不可』記述もrename許可に整合させること。BUILDLOG.mdに完了エントリ、NEXTSTEP.mdが次フェーズを指すこと。",
+        "verify": "grep -q 'フォント設定' RDD.md && grep -q 'GET /api/shells' RDD.md && grep -q 'PATCH /api/sessions' RDD.md && grep -q '\\[requirements-v2\\] 完了' BUILDLOG.md && grep -q '現在: backend-v2' NEXTSTEP.md"
+      },
+      "adversaryReview": true,
+      "reviewScope": [
+        "RDD.md"
+      ]
+    },
+    {
+      "id": "backend-v2",
+      "name": "バックエンドv2実装（shells検出・create拡張・rename API）",
+      "allow": [
+        "backend/",
+        "BUILDLOG.md",
+        "NEXTSTEP.md"
+      ],
+      "block": [
+        "frontend/",
+        "terraform/",
+        "RDD.md"
+      ],
+      "completionCondition": {
+        "description": "GET /api/shells（利用可能シェルを検出して許可リストとして返す）、POST /api/sessions のシェル指定拡張（許可リスト内のみ受理・許可リスト外/任意パス指定は400を返す）、PATCH /api/sessions/:id（名前変更・1〜30文字・制御文字禁止のバリデーション・違反は400）を実装。許可リスト方式で任意パス実行を防ぐこと。TypeScriptビルドが通り、全テストがGREEN（カバレッジ80%閾値。許可リスト外シェル・不正名の異常系テストを含む）であること。",
+        "verify": "cd backend && npm run build && npm test && cd .. && grep -q '\\[backend-v2\\] 完了' BUILDLOG.md && grep -q '現在: frontend-v2' NEXTSTEP.md"
+      },
+      "adversaryReview": true,
+      "reviewScope": [
+        "backend/src/"
+      ]
+    },
+    {
+      "id": "frontend-v2",
+      "name": "フロントエンドv2実装（設定UI・シェル選択・インライン名前変更）",
+      "allow": [
+        "frontend/",
+        "BUILDLOG.md",
+        "NEXTSTEP.md"
+      ],
+      "block": [
+        "backend/",
+        "terraform/",
+        "RDD.md"
+      ],
+      "completionCondition": {
+        "description": "設定UI（等幅フォントプリセット選択＋10〜20pxサイズ、localStorage保存・全ターミナルへ即時反映）、新規ターミナル作成時のシェル選択（GET /api/shells の一覧から選択）、パネルタイトルのインライン名前変更（1〜30文字・制御文字禁止のクライアント側バリデーションとPATCH連携）を実装。ビルドが通り、全テストがGREEN（カバレッジ80%閾値）であること。",
+        "verify": "cd frontend && npm run build && npm test && cd .. && grep -q '\\[frontend-v2\\] 完了' BUILDLOG.md && grep -q '現在: integration-v2' NEXTSTEP.md"
+      },
+      "adversaryReview": true,
+      "reviewScope": [
+        "frontend/src/"
+      ]
+    },
+    {
+      "id": "integration-v2",
+      "name": "Docker再ビルド・統合確認（v2）",
+      "allow": [
+        "terraform/",
+        "backend/Dockerfile",
+        "frontend/Dockerfile",
+        "BUILDLOG.md",
+        "NEXTSTEP.md"
+      ],
+      "block": [
+        "RDD.md"
+      ],
+      "completionCondition": {
+        "description": "v2機能を含むイメージでDocker再ビルドし、terraform validate / fmt が通過。terraform apply で2コンテナがUpになり、フォント変更の即時反映・シェル選択での起動・許可リスト外シェル指定の400応答・セッション名変更・公開ポリシー（127.0.0.1限定バインド）が動作することを手動確認しBUILDLOG.mdに記録すること。",
+        "verify": "cd terraform && terraform init -backend=false && terraform validate && terraform fmt -check && cd .. && grep -q '\\[integration-v2\\] 完了' BUILDLOG.md && grep -q '現在: docs-v2' NEXTSTEP.md"
+      },
+      "adversaryReview": true,
+      "reviewScope": [
+        "terraform/",
+        "backend/Dockerfile",
+        "frontend/Dockerfile"
+      ]
+    },
+    {
+      "id": "docs-v2",
+      "name": "ドキュメント整備（v2）",
+      "allow": [
+        "README.md",
+        "BUILDLOG.md",
+        "NEXTSTEP.md"
+      ],
+      "block": [
+        "frontend/",
+        "backend/",
+        "terraform/",
+        "RDD.md"
+      ],
+      "completionCondition": {
+        "description": "README.md にv2機能（フォント設定・シェル選択・セッション名変更）の使い方とGET /api/shells・PATCH /api/sessions/:id のAPI説明を追記し、BUILDLOG.mdが完成状態であること。",
+        "verify": "test -f README.md && grep -q 'シェル選択' README.md && grep -q '\\[docs-v2\\] 完了' BUILDLOG.md && grep -q 'v2全フェーズ完了' NEXTSTEP.md"
+      },
+      "adversaryReview": false
+    },
+    {
+      "id": "requirements-v3",
+      "name": "v3要件確定（RDD改訂：Windowsマルチシェル対応・ホスト直接起動サポート）",
+      "allow": [
+        "RDD.md",
+        "BUILDLOG.md",
+        "NEXTSTEP.md"
+      ],
+      "block": [
+        "frontend/",
+        "backend/",
+        "terraform/"
+      ],
+      "completionCondition": {
+        "description": "RDD.md を改訂し、v3要件（Windowsマルチシェル対応）を追記。(1)Windowsホストでのbackend直接起動を正式サポート構成として明記、(2)シェル検出のWindows対応=cmd.exe/powershell.exe/pwsh(存在時)/wsl.exe -l -v で列挙した各ディストロ×ログインシェル、(3)ShellInfoにargsフィールド追加（wslは -d <distro> --cd ~ -- <shell> -l）、(4)状態判定にcmd.exeプロンプトパターン追加、(5)既存セキュリティ要件（許可リスト・許可外400・Origin検証・127.0.0.1限定）維持、(6)conpty AttachConsole既知事象の握りつぶし方針。",
+        "verify": "grep -q 'Windowsマルチシェル' RDD.md && grep -q 'wsl.exe' RDD.md && grep -q 'args' RDD.md && grep -q '\\[requirements-v3\\] 完了' BUILDLOG.md && grep -q '現在: backend-v3' NEXTSTEP.md"
+      },
+      "adversaryReview": true,
+      "reviewScope": [
+        "RDD.md"
+      ]
+    },
+    {
+      "id": "backend-v3",
+      "name": "バックエンドv3実装（Windowsシェル検出・args対応・状態判定拡張）",
+      "allow": [
+        "backend/",
+        "BUILDLOG.md",
+        "NEXTSTEP.md"
+      ],
+      "block": [
+        "frontend/",
+        "terraform/",
+        "RDD.md"
+      ],
+      "completionCondition": {
+        "description": "Windows用シェル検出（cmd.exe/powershell.exe/pwsh存在時/wsl.exe -l -v 列挙の各ディストロ×ログインシェル）をGET /api/shellsに統合。ShellInfoにargs追加しPTY起動時に適用（wslは -d <distro> --cd ~ -- <shell> -l）。state-detectorにcmd.exeプロンプトパターン追加。conpty AttachConsole failedを握りつぶす。既存セキュリティ要件維持。build通過・全テストGREEN（80%閾値。Windowsシェル検出・args構築・cmdプロンプト判定・許可リスト外400の異常系含む）。",
+        "verify": "cd backend && npm run build && npm test && cd .. && grep -q '\\[backend-v3\\] 完了' BUILDLOG.md && grep -q '現在: frontend-v3' NEXTSTEP.md"
+      },
+      "adversaryReview": true,
+      "reviewScope": [
+        "backend/src/"
+      ]
+    },
+    {
+      "id": "frontend-v3",
+      "name": "フロントエンドv3実装（シェル選択ラベル整備・軽微）",
+      "allow": [
+        "frontend/",
+        "BUILDLOG.md",
+        "NEXTSTEP.md"
+      ],
+      "block": [
+        "backend/",
+        "terraform/",
+        "RDD.md"
+      ],
+      "completionCondition": {
+        "description": "既存（v2）のシェル選択UIを流用し、Windows系シェル（cmd/PowerShell/WSL Ubuntuのzsh等）のラベル表示を整える軽微改修。新規UI・状態管理変更は行わない。build通過・全テストGREEN（80%閾値）。",
+        "verify": "cd frontend && npm run build && npm test && cd .. && grep -q '\\[frontend-v3\\] 完了' BUILDLOG.md && grep -q '現在: integration-v3' NEXTSTEP.md"
+      },
+      "adversaryReview": false
+    },
+    {
+      "id": "integration-v3",
+      "name": "Windowsホスト実機確認・起動手順整備（v3）",
+      "allow": [
+        "scripts/",
+        "BUILDLOG.md",
+        "NEXTSTEP.md"
+      ],
+      "block": [
+        "frontend/",
+        "backend/",
+        "terraform/",
+        "RDD.md"
+      ],
+      "completionCondition": {
+        "description": "Windowsホストでbackendを直接起動する手順・起動スクリプト（scripts/start-windows.ps1）を整備し、PoC同等の実機確認: powershell.exe/cmd.exe/wsl Ubuntu-22.04 zsh -l（.zshrc読込）の対話動作、シェル選択起動・cmdプロンプト状態判定・許可リスト外400・127.0.0.1限定バインド。実機確認はWSLからpowershell.exe interop経由の手動確認（CI不可）とし結果をBUILDLOGに記録。verifyはスクリプト存在＋マーカーの機械チェックのみ。",
+        "verify": "test -f scripts/start-windows.ps1 && grep -q '\\[integration-v3\\] 完了' BUILDLOG.md && grep -q '現在: docs-v3' NEXTSTEP.md"
+      },
+      "adversaryReview": true,
+      "reviewScope": [
+        "scripts/"
+      ]
+    },
+    {
+      "id": "docs-v3",
+      "name": "ドキュメント整備（v3）",
+      "allow": [
+        "README.md",
+        "BUILDLOG.md",
+        "NEXTSTEP.md"
+      ],
+      "block": [
+        "frontend/",
+        "backend/",
+        "terraform/",
+        "RDD.md"
+      ],
+      "completionCondition": {
+        "description": "README.mdにv3機能（Windowsマルチシェル対応・Windowsホストbackend直接起動手順・cmd/PowerShell/WSL Ubuntu(zsh)選択・node-pty prebuilt前提・conpty既知事象・セキュリティ維持）を追記し、BUILDLOG.md完成。",
+        "verify": "test -f README.md && grep -q 'Windowsホスト' README.md && grep -q '\\[docs-v3\\] 完了' BUILDLOG.md && grep -q 'v3全フェーズ完了' NEXTSTEP.md"
+      },
+      "adversaryReview": false
+    }
+  ]
+}

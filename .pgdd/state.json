@@ -1,0 +1,233 @@
+{
+  "version": 2,
+  "currentPhase": "docs-v3",
+  "mode": "sparring",
+  "modeChangedAt": "2026-07-25T07:39:08.287Z",
+  "auditLog": [
+    {
+      "at": "2026-07-24T09:04:11.584Z",
+      "action": "init",
+      "detail": "新規生成"
+    },
+    {
+      "at": "2026-07-25T03:13:20.422Z",
+      "action": "note",
+      "detail": "## フェーズ1: 開発前チェックリスト不足項目の決定（ユーザー指示「最後まで走ってアプリ完成させて」に基づきAgentが決定）\n- 決定: 生成先はプロジェク"
+    },
+    {
+      "at": "2026-07-25T03:20:13.161Z",
+      "action": "note",
+      "detail": "## フェーズ1: adversaryレビュー1回目FAILへの対応（C-1/C-2/H-1/H-2/H-3/M-1/M-2/M-3）\n- 決定: アクセス制御"
+    },
+    {
+      "at": "2026-07-25T03:23:34.847Z",
+      "action": "note",
+      "detail": "## フェーズ1: adversaryレビュー2回目FAILへの対応\n- 決定: Agent.mdフロントエンド実装節のグリッド配置指示を削除（RDD 6章の除"
+    },
+    {
+      "at": "2026-07-25T03:26:33.303Z",
+      "action": "review-save",
+      "detail": "requirements: PASS"
+    },
+    {
+      "at": "2026-07-25T03:26:44.693Z",
+      "action": "next",
+      "detail": "requirements → environment"
+    },
+    {
+      "at": "2026-07-25T03:27:25.742Z",
+      "action": "next",
+      "detail": "environment → scaffold"
+    },
+    {
+      "at": "2026-07-25T03:34:21.276Z",
+      "action": "next",
+      "detail": "scaffold → backend"
+    },
+    {
+      "at": "2026-07-25T04:11:28.412Z",
+      "action": "review-save",
+      "detail": "backend: PASS"
+    },
+    {
+      "at": "2026-07-25T04:11:30.045Z",
+      "action": "next",
+      "detail": "backend → frontend"
+    },
+    {
+      "at": "2026-07-25T04:23:17.460Z",
+      "action": "mode:sparring",
+      "detail": "Phase 5のE2E検証でbackendの状態判定バグを発見（ESC= 2文字シーケンス未除去で末尾行が'='となりidle判定不能）。クロスフェーズ修正のため一時解除"
+    },
+    {
+      "at": "2026-07-25T04:29:27.689Z",
+      "action": "note",
+      "detail": "## sparring棚卸し（Phase 5中のbackend横断修正）\n- 決定: state-detectorのANSI除去正規表現に2文字ESCシーケンス"
+    },
+    {
+      "at": "2026-07-25T04:29:37.202Z",
+      "action": "mode:gate",
+      "detail": "棚卸し1件: Phase 5 E2E検証で発見したbackend状態判定バグ（ESC= 2文字シーケンス未除去）を修正。回帰テスト追加・63テストGREEN・build成功・bash実機で全状態遷移確認。詳細はnotes.md参照"
+    },
+    {
+      "at": "2026-07-25T04:38:27.890Z",
+      "action": "review-save",
+      "detail": "frontend: PASS"
+    },
+    {
+      "at": "2026-07-25T04:38:38.067Z",
+      "action": "next",
+      "detail": "frontend → iac-integration"
+    },
+    {
+      "at": "2026-07-25T04:49:25.402Z",
+      "action": "review-save",
+      "detail": "iac-integration: PASS"
+    },
+    {
+      "at": "2026-07-25T04:49:26.236Z",
+      "action": "next",
+      "detail": "iac-integration → docs"
+    },
+    {
+      "at": "2026-07-25T04:50:26.407Z",
+      "action": "next",
+      "detail": "docs: 最終フェーズ完了"
+    },
+    {
+      "at": "2026-07-25T05:19:19.703Z",
+      "action": "config-apply",
+      "detail": "phases: requirements,environment,scaffold,backend,frontend,iac-integration,docs,requirements-v2,backend-v2,frontend-v2,integration-v2,docs-v2"
+    },
+    {
+      "at": "2026-07-25T05:19:19.738Z",
+      "action": "next",
+      "detail": "docs → requirements-v2"
+    },
+    {
+      "at": "2026-07-25T05:20:35.049Z",
+      "action": "note",
+      "detail": "## v2機能拡張（ユーザー要望 2026-07-25: フォント設定・シェル選択・セッション名変更）\n- 決定: v2フェーズ5本（requirements-"
+    },
+    {
+      "at": "2026-07-25T05:24:11.973Z",
+      "action": "review-save",
+      "detail": "requirements-v2: PASS"
+    },
+    {
+      "at": "2026-07-25T05:24:12.018Z",
+      "action": "next",
+      "detail": "requirements-v2 → backend-v2"
+    },
+    {
+      "at": "2026-07-25T05:31:47.013Z",
+      "action": "review-save",
+      "detail": "backend-v2: PASS"
+    },
+    {
+      "at": "2026-07-25T05:31:48.980Z",
+      "action": "next",
+      "detail": "backend-v2 → frontend-v2"
+    },
+    {
+      "at": "2026-07-25T05:49:37.144Z",
+      "action": "review-save",
+      "detail": "frontend-v2: PASS"
+    },
+    {
+      "at": "2026-07-25T05:49:46.327Z",
+      "action": "next",
+      "detail": "frontend-v2 → integration-v2"
+    },
+    {
+      "at": "2026-07-25T05:57:41.377Z",
+      "action": "review-save",
+      "detail": "integration-v2: PASS"
+    },
+    {
+      "at": "2026-07-25T05:57:42.451Z",
+      "action": "next",
+      "detail": "integration-v2 → docs-v2"
+    },
+    {
+      "at": "2026-07-25T05:58:44.729Z",
+      "action": "next",
+      "detail": "docs-v2: 最終フェーズ完了"
+    },
+    {
+      "at": "2026-07-25T06:21:00.500Z",
+      "action": "config-apply",
+      "detail": "phases: requirements,environment,scaffold,backend,frontend,iac-integration,docs,requirements-v2,backend-v2,frontend-v2,integration-v2,docs-v2,requirements-v3,backend-v3,frontend-v3,integration-v3,docs-v3"
+    },
+    {
+      "at": "2026-07-25T06:21:00.602Z",
+      "action": "next",
+      "detail": "docs-v2 → requirements-v3"
+    },
+    {
+      "at": "2026-07-25T06:22:02.861Z",
+      "action": "note",
+      "detail": "## v3機能拡張（ユーザー要望 2026-07-25: 新規ボタンからcmd/PowerShell/WSL zshをVSCode風に）\n- 決定: v3フェー"
+    },
+    {
+      "at": "2026-07-25T06:28:30.583Z",
+      "action": "review-save",
+      "detail": "requirements-v3: PASS"
+    },
+    {
+      "at": "2026-07-25T06:28:30.750Z",
+      "action": "next",
+      "detail": "requirements-v3 → backend-v3"
+    },
+    {
+      "at": "2026-07-25T06:39:07.814Z",
+      "action": "review-save",
+      "detail": "backend-v3: PASS"
+    },
+    {
+      "at": "2026-07-25T06:39:11.093Z",
+      "action": "next",
+      "detail": "backend-v3 → frontend-v3"
+    },
+    {
+      "at": "2026-07-25T06:42:59.113Z",
+      "action": "next",
+      "detail": "frontend-v3 → integration-v3"
+    },
+    {
+      "at": "2026-07-25T07:02:33.401Z",
+      "action": "review-save",
+      "detail": "integration-v3: PASS"
+    },
+    {
+      "at": "2026-07-25T07:02:33.507Z",
+      "action": "next",
+      "detail": "integration-v3 → docs-v3"
+    },
+    {
+      "at": "2026-07-25T07:03:51.683Z",
+      "action": "next",
+      "detail": "docs-v3: 最終フェーズ完了"
+    },
+    {
+      "at": "2026-07-25T07:39:08.288Z",
+      "action": "mode:sparring",
+      "detail": "新規ターミナルボタンから直接シェル種類を選ぶスプリットボタンUI追加（設定窓経由をやめる）。frontend軽微UI改善"
+    },
+    {
+      "at": "2026-07-25T08:00:44.637Z",
+      "action": "note",
+      "detail": "## sparring（ユーザー要望 2026-07-25: UI改善）\n- 決定: 新規ターミナルボタンをVSCode風スプリットボタン化。本体クリックで既定"
+    },
+    {
+      "at": "2026-07-26T09:13:43.470Z",
+      "action": "note",
+      "detail": "## sparring（ユーザー要望 2026-07-26: Alt+数字でターミナル移動）\n- 決定: レイアウトツリーのin-order走査(collect"
+    },
+    {
+      "at": "2026-07-26T17:30:25.090Z",
+      "action": "note",
+      "detail": "## sparring（ユーザー要望 2026-07-27: 分割ボタンのシェル選択 + Claude Code状態判定）\n- 要望1: 縦/横分割ボタンでシェ"
+    }
+  ]
+}
