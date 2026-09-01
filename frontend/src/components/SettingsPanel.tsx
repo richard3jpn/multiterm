@@ -1,6 +1,6 @@
-import { useState } from 'react';
-import { Settings } from 'lucide-react';
-import { Button } from '@/components/ui/button';
+import { useState } from 'preact/hooks';
+import { Settings } from './icons';
+import { Button } from './primitives/Button';
 import { useSettings } from '../contexts/settings-context';
 import { FONT_PRESETS, FONT_SIZE_MAX, FONT_SIZE_MIN } from '../features/settings/settings';
 
@@ -38,7 +38,7 @@ export function SettingsPanel() {
                 <select
                   id="font-family"
                   value={settings.fontFamilyId}
-                  onChange={(e) => setFontFamilyId(e.target.value)}
+                  onChange={(e) => setFontFamilyId(e.currentTarget.value)}
                   className="h-8 w-full rounded border border-input bg-background px-2 text-xs"
                 >
                   {FONT_PRESETS.map((preset) => (
@@ -60,7 +60,7 @@ export function SettingsPanel() {
                   max={FONT_SIZE_MAX}
                   step={1}
                   value={settings.fontSize}
-                  onChange={(e) => setFontSize(Number(e.target.value))}
+                  onChange={(e) => setFontSize(Number(e.currentTarget.value))}
                   className="w-full"
                 />
               </div>

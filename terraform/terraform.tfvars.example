@@ -1,6 +1,0 @@
-# terraform.tfvars にコピーして使用（terraform.tfvars 本体はコミット禁止）
-project_slug = "multiterm"
-
-# ポートを変更する場合のみ上書き
-# backend_port  = 3001
-# frontend_port = 3000

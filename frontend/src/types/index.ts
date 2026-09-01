@@ -14,9 +14,13 @@ export interface ApiEnvelope<T> {
   readonly error: string | null;
 }
 
+/**
+ * WSはバイナリフレーム（タグ1バイト + ペイロード）。
+ * PTY出力は生バイトのまま受け取り、xtermへ直接渡す（JSONエスケープ/パースを挟まない）。
+ */
 export type ServerMessage =
-  | { readonly type: 'replay'; readonly data: string }
-  | { readonly type: 'data'; readonly data: string }
+  | { readonly type: 'replay'; readonly data: Uint8Array }
+  | { readonly type: 'data'; readonly data: Uint8Array }
   | { readonly type: 'status'; readonly status: SessionStatus }
   | { readonly type: 'exit'; readonly exitCode: number }
   | { readonly type: 'error'; readonly error: string };

@@ -19,3 +19,7 @@ terraform.tfvars
 
 # Coverage レポート（生成物）
 coverage/
+
+# ブラウザ検証の生成物（プロジェクト直下のみ。frontend/public 等の正規の画像は対象外）
+/*.png
+.playwright-mcp/

@@ -1,10 +1,10 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'preact/hooks';
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import { WebglAddon } from '@xterm/addon-webgl';
 import '@xterm/xterm/css/xterm.css';
-import { X } from 'lucide-react';
-import { Button } from '@/components/ui/button';
+import { X } from './icons';
+import { Button } from './primitives/Button';
 import { SplitControls } from './SplitControls';
 import { useSettings } from '../contexts/settings-context';
 import { useTheme } from '../contexts/theme-context';
@@ -33,10 +33,41 @@ interface TerminalPanelProps {
   readonly onSplit: (sessionId: string, direction: SplitDirection, shellId?: string | null) => void;
   readonly onExited: (sessionId: string) => void;
   readonly onRenamed: (session: Session) => void;
+  /** サイドバーで一覧表示するため、状態の変化を親へ伝える */
+  readonly onStatusChange: (sessionId: string, status: SessionStatus) => void;
 }
 
+/**
+ * ANSI 16色。Windows Terminal の既定スキーム「Campbell」に合わせる。
+ *
+ * xterm.js の既定パレットは Tango（GNOME Terminal 由来）で、緑 #4e9a06 や
+ * シアン #06989a のように暗い。ダーク背景では沈んで「色が付いていない」ように見えるため、
+ * 普段使っているターミナルと同じ発色にする。
+ * 出典: https://learn.microsoft.com/en-us/windows/terminal/customize-settings/color-schemes
+ */
+const CAMPBELL_ANSI = {
+  black: '#0C0C0C',
+  red: '#C50F1F',
+  green: '#13A10E',
+  yellow: '#C19C00',
+  blue: '#0037DA',
+  magenta: '#881798',
+  cyan: '#3A96DD',
+  white: '#CCCCCC',
+  brightBlack: '#767676',
+  brightRed: '#E74856',
+  brightGreen: '#16C60C',
+  brightYellow: '#F9F1A5',
+  brightBlue: '#3B78FF',
+  brightMagenta: '#B4009E',
+  brightCyan: '#61D6D6',
+  brightWhite: '#F2F2F2',
+} as const;
+
 const XTERM_THEMES = {
-  dark: { background: '#0a0a0a', foreground: '#e5e5e5', cursor: '#e5e5e5' },
+  // 背景・前景はアプリの配色に合わせたまま、16色だけ Campbell を使う
+  dark: { background: '#0a0a0a', foreground: '#e5e5e5', cursor: '#e5e5e5', ...CAMPBELL_ANSI },
+  // ライトテーマは白背景。Campbellの明色は視認性が落ちるため既定パレットのまま
   light: { background: '#ffffff', foreground: '#171717', cursor: '#171717' },
 } as const;
 
@@ -51,11 +82,15 @@ export function TerminalPanel({
   onSplit,
   onExited,
   onRenamed,
+  onStatusChange,
 }: TerminalPanelProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
   const [status, setStatus] = useState<SessionStatus>(session.status);
+  // WS購読のEffectはsession.idだけで張り直すため、最新のコールバックをrefで参照する
+  const onStatusChangeRef = useRef(onStatusChange);
+  onStatusChangeRef.current = onStatusChange;
   const [connected, setConnected] = useState(true);
   const [editing, setEditing] = useState(false);
   const [draftTitle, setDraftTitle] = useState(session.title);
@@ -89,9 +124,11 @@ export function TerminalPanel({
     fit.fit();
 
     const ws = new WebSocket(buildWsUrl(session.id));
+    // PTY出力は生バイトで受け取り、xtermへ直接書き込む（JSONパースを挟まない）
+    ws.binaryType = 'arraybuffer';
 
     ws.onmessage = (event) => {
-      if (typeof event.data !== 'string') return;
+      if (!(event.data instanceof ArrayBuffer)) return;
       const message = parseServerMessage(event.data);
       if (!message) return;
       switch (message.type) {
@@ -101,6 +138,7 @@ export function TerminalPanel({
           break;
         case 'status':
           setStatus(message.status);
+          onStatusChangeRef.current(session.id, message.status);
           break;
         case 'exit':
           onExited(session.id);
@@ -224,7 +262,7 @@ export function TerminalPanel({
             value={draftTitle}
             maxLength={60}
             onChange={(e) => {
-              setDraftTitle(e.target.value);
+              setDraftTitle(e.currentTarget.value);
               setRenameError(false);
             }}
             onBlur={() => void commitRename()}
@@ -244,7 +282,7 @@ export function TerminalPanel({
         ) : (
           <button
             type="button"
-            className="cursor-text text-xs font-medium hover:underline"
+            className="cursor-text truncate text-xs font-medium hover:underline"
             title="クリックして名前を変更"
             onClick={() => {
               setDraftTitle(session.title);
@@ -254,10 +292,14 @@ export function TerminalPanel({
             {session.title}
           </button>
         )}
-        <span className="text-xs text-muted-foreground" title={`シェル: ${shellLabel}`}>
+        {/* パネルが狭いときは折り返さずに省略する（サイドバー表示時に幅が減るため） */}
+        <span
+          className="min-w-0 truncate text-xs text-muted-foreground"
+          title={`シェル: ${shellLabel}`}
+        >
           {shellLabel}
         </span>
-        <span className="text-xs text-muted-foreground">
+        <span className="shrink-0 whitespace-nowrap text-xs text-muted-foreground">
           {connected ? statusLabel(status) : '切断'}
         </span>
         <div className="ml-auto flex items-center gap-1">

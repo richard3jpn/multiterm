@@ -1,77 +1,68 @@
-# MultiTerm - Windows host startup script (RDD 9.5)
+﻿# MultiTerm - Windows ホストでの起動（RDD 9.5章）
 #
-# Runs the backend directly on the Windows host so that new terminals can open
-# Windows PowerShell / cmd.exe / WSL distros (zsh etc., with your dotfiles).
+# Rust バックエンドが PTY・WebSocket・画面の静的配信をすべて担うため、起動するのは
+# 1プロセス・1ポートだけ。Node.js の常駐（Express / Vite）はもう無い。
 #
-# Prerequisite: Node.js (v22.x) installed on Windows. node-pty ships prebuilt (no build tools).
-# Usage (from PowerShell):
-#   cd <project>\scripts
-#   .\start-windows.ps1
-# Stop: Ctrl+C (terminates both process trees)
+# 前提:
+#   - Rust ツールチェーン（stable-x86_64-pc-windows-msvc）と MSVC Build Tools
+#   - Node.js（フロントのビルドにのみ使用。実行時には不要）
+#
+# 使い方:
+#   .\start-windows.ps1            # 差分ビルドして起動
+#   .\start-windows.ps1 -Rebuild   # フロントの npm ci からやり直す
+#   .\start-windows.ps1 -SkipBuild # ビルドを飛ばして起動だけ（前回の成果物を使う）
+# 停止: Ctrl+C
+
+param(
+  [switch]$Rebuild,
+  [switch]$SkipBuild
+)
 
 $ErrorActionPreference = 'Stop'
 
 $Root = Split-Path -Parent $PSScriptRoot
-$Backend = Join-Path $Root 'backend'
-$Frontend = Join-Path $Root 'frontend'
+$BackendRs = Join-Path $Root 'backend-rs'
+$Port = 3001
 
-$BackendPort = 3001
-$FrontendPort = 5173
-
-# Security (RDD 5.12 / 8): loopback-only bind + Origin whitelist.
-# Use 127.0.0.1 (not "localhost") everywhere to avoid IPv4/IPv6 resolution mismatch.
-$env:PORT = "$BackendPort"
+# セキュリティ（RDD 5章12項 / 8章）: ループバック限定バインド + Origin ホワイトリスト。
+# 画面も同じポートから配信するため、許可オリジンはこのポート自身になる。
+# IPv4/IPv6 の解決差を避けるため 127.0.0.1 と localhost の両方を許可する。
+$env:PORT = "$Port"
 $env:HOST = '127.0.0.1'
-$env:ALLOWED_ORIGINS = "http://127.0.0.1:$FrontendPort,http://localhost:$FrontendPort"
-$env:NODE_ENV = 'development'
-$env:VITE_WS_URL = "ws://127.0.0.1:$BackendPort"
-$env:VITE_API_URL = "http://127.0.0.1:$BackendPort"
+$env:ALLOWED_ORIGINS = "http://127.0.0.1:$Port,http://localhost:$Port"
 
 Write-Host '=== MultiTerm (Windows host) ===' -ForegroundColor Cyan
-Write-Host "backend : http://127.0.0.1:$BackendPort (loopback only)" -ForegroundColor Gray
-Write-Host "frontend: http://127.0.0.1:$FrontendPort" -ForegroundColor Gray
+Write-Host "  http://127.0.0.1:$Port （画面・API・WebSocket すべて同一ポート）" -ForegroundColor Gray
 
-# Install deps on first run (node-pty is prebuilt)
-if (-not (Test-Path (Join-Path $Backend 'node_modules'))) {
-  Write-Host 'backend: npm install...' -ForegroundColor Yellow
-  Push-Location $Backend; npm install --no-fund --no-audit; Pop-Location
-}
-if (-not (Test-Path (Join-Path $Frontend 'node_modules'))) {
-  Write-Host 'frontend: npm install...' -ForegroundColor Yellow
-  Push-Location $Frontend; npm install --no-fund --no-audit; Pop-Location
+if (-not $SkipBuild) {
+  # フロントは非ASCIIパスでビルドが壊れるため、専用スクリプトが ASCII パスへ退避して行う
+  & (Join-Path $PSScriptRoot 'build-frontend.ps1') -Force:$Rebuild
 }
 
-# Build backend with tsc, then run compiled JS with node.
-# (npx tsx did not start reliably in verification; compiled node is the supported path.)
-Write-Host 'backend: building (tsc)...' -ForegroundColor Yellow
-Push-Location $Backend; & npm run build; Pop-Location
-if (-not (Test-Path (Join-Path $Backend 'dist\server.js'))) {
-  throw 'backend build failed: dist/server.js not found'
+# rust-embed が frontend\dist を焼き込むため、dist が無いとコンパイルが通らない
+if (-not (Test-Path (Join-Path $Root 'frontend\dist\index.html'))) {
+  throw 'frontend\dist がありません。-SkipBuild を外して実行してください'
 }
 
-# Start backend (node) and frontend (vite). cmd /c ensures .cmd shims resolve.
-$backendProc = Start-Process -PassThru -NoNewWindow -WorkingDirectory $Backend `
-  -FilePath 'node' -ArgumentList 'dist\server.js'
-$frontendProc = Start-Process -PassThru -NoNewWindow -WorkingDirectory $Frontend `
-  -FilePath 'cmd' -ArgumentList '/c', 'npx', 'vite', '--port', "$FrontendPort", '--strictPort'
+Write-Host '  cargo build --release ...' -ForegroundColor Yellow
+Push-Location $BackendRs
+try { & cargo build --release } finally { Pop-Location }
 
-Write-Host "Open http://127.0.0.1:$FrontendPort in your browser." -ForegroundColor Green
-Write-Host 'Press Ctrl+C to stop.' -ForegroundColor Gray
+$Exe = Join-Path $BackendRs 'target\release\multiterm-backend.exe'
+if (-not (Test-Path $Exe)) { throw "ビルド結果が見つかりません: $Exe" }
 
-# Terminate a whole process tree by PID (kills grandchildren too)
-function Stop-Tree($processId) {
-  if ($processId) { taskkill /PID $processId /T /F 2>$null | Out-Null }
-}
+Write-Host "  起動: $Exe" -ForegroundColor Green
+Write-Host '  Ctrl+C で停止します。' -ForegroundColor Gray
 
+# 子プロセスとして起動し、Ctrl+C 時にプロセスツリーごと終了させる
+# （PTY の子孫（wsl.exe / powershell.exe 等）を残さないため）
+$proc = Start-Process -PassThru -NoNewWindow -FilePath $Exe
 try {
-  # Stop everything as soon as EITHER process exits (so a crashed backend is noticed)
-  while ($true) {
-    Start-Sleep -Seconds 1
-    if ($backendProc.HasExited) { Write-Host 'backend exited.' -ForegroundColor Red; break }
-    if ($frontendProc.HasExited) { Write-Host 'frontend exited.' -ForegroundColor Red; break }
-  }
+  while (-not $proc.HasExited) { Start-Sleep -Seconds 1 }
+  Write-Host 'backend exited.' -ForegroundColor Red
 }
 finally {
-  Stop-Tree $backendProc.Id
-  Stop-Tree $frontendProc.Id
+  if ($proc -and -not $proc.HasExited) {
+    taskkill /PID $proc.Id /T /F 2>$null | Out-Null
+  }
 }

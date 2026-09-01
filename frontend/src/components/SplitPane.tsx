@@ -1,12 +1,12 @@
-import { useCallback, useRef } from 'react';
-import type { ReactNode } from 'react';
+import { useCallback, useRef } from 'preact/hooks';
+import type { ComponentChildren, JSX } from 'preact';
 import { clampRatio } from '../features/layout/layout-tree';
 import type { LayoutNode, SplitPath } from '../features/layout/layout-tree';
 
 interface SplitPaneProps {
   readonly node: LayoutNode;
   readonly path: SplitPath;
-  readonly renderLeaf: (sessionId: string) => ReactNode;
+  readonly renderLeaf: (sessionId: string) => ComponentChildren;
   readonly onRatioChange: (path: SplitPath, ratio: number) => void;
 }
 
@@ -15,7 +15,7 @@ export function SplitPane({ node, path, renderLeaf, onRatioChange }: SplitPanePr
   const containerRef = useRef<HTMLDivElement>(null);
 
   const handleDividerPointerDown = useCallback(
-    (event: React.PointerEvent<HTMLDivElement>) => {
+    (event: JSX.TargetedPointerEvent<HTMLDivElement>) => {
       if (node.type !== 'split') return;
       const container = containerRef.current;
       if (!container) return;

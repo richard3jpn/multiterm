@@ -1,8 +1,8 @@
 {
   "version": 2,
-  "currentPhase": "docs-v3",
+  "currentPhase": "sparring-v4",
   "mode": "sparring",
-  "modeChangedAt": "2026-07-25T07:39:08.287Z",
+  "modeChangedAt": "2026-08-28T03:08:19.000Z",
   "auditLog": [
     {
       "at": "2026-07-24T09:04:11.584Z",
@@ -228,6 +228,16 @@
       "at": "2026-07-26T17:30:25.090Z",
       "action": "note",
       "detail": "## sparring（ユーザー要望 2026-07-27: 分割ボタンのシェル選択 + Claude Code状態判定）\n- 要望1: 縦/横分割ボタンでシェ"
+    },
+    {
+      "at": "2026-08-28T03:08:19.000Z",
+      "action": "config-apply",
+      "detail": "phase追加: sparring-v4（軽量化/Rust化）。allow=['./'] block=[] で全ファイル解禁。pgdd-gate-check.js は state.mode を参照せず currentPhase の allow/block のみで判定するため、フェーズ追加で解除する"
+    },
+    {
+      "at": "2026-08-28T03:08:19.000Z",
+      "action": "next",
+      "detail": "docs-v3 → sparring-v4"
     }
   ]
 }

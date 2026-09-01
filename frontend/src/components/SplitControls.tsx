@@ -1,6 +1,6 @@
-import { useState } from 'react';
-import { Columns2, Rows2 } from 'lucide-react';
-import { Button } from '@/components/ui/button';
+import { useState } from 'preact/hooks';
+import { Columns2, Rows2 } from './icons';
+import { Button } from './primitives/Button';
 import type { SplitDirection } from '../features/layout/layout-tree';
 import type { ShellInfo } from '../types';
 

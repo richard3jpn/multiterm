@@ -1,5 +1,6 @@
-import { createContext, useCallback, useContext, useEffect, useState } from 'react';
-import type { ReactNode } from 'react';
+import { createContext } from 'preact';
+import type { ComponentChildren } from 'preact';
+import { useCallback, useContext, useEffect, useState } from 'preact/hooks';
 
 export type Theme = 'dark' | 'light';
 
@@ -21,7 +22,7 @@ const loadTheme = (): Theme => {
   }
 };
 
-export function ThemeProvider({ children }: { children: ReactNode }) {
+export function ThemeProvider({ children }: { children: ComponentChildren }) {
   const [theme, setTheme] = useState<Theme>(loadTheme);
 
   useEffect(() => {

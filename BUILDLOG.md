@@ -311,3 +311,638 @@
 - v3実機エビデンス: Windowsホストで cmd / PowerShell / WSL Ubuntu-22.04(zsh, .zshrc込み) の対話動作・許可リスト外400・状態判定・127.0.0.1限定を確認
 
 [docs-v3] 完了
+
+## Phase 18: sparring-v4 軽量化（バックエンド Rust 化）
+
+### 着手前の実測（2026-08-28）
+
+| 項目 | 実測 |
+|---|---|
+| backend プロセス | node 63.6MB (Private 50.8MB) |
+| frontend プロセス | vite dev 113.4MB (Private 183.5MB) |
+| node_modules | backend 162MB/147pkg + frontend 303MB/395pkg = 465MB / 542pkg |
+| ソース（非テスト） | backend 933行 / frontend 1,603行 |
+
+特定した性能ボトルネック（PTY出力1チャンクごとに全て発生）:
+
+- `backend/src/pty/ring-buffer.ts:7` — `(buffer + chunk).slice(-limit)` で毎回最大200KBの文字列を再確保（O(200KB)×チャンク数）
+- `backend/src/ws/handler.ts:47` — `JSON.stringify` で出力全体をJSONエスケープ
+- `frontend/src/services/ws.ts:12` — `JSON.parse` で全体をデコード
+- `backend/src/monitor/state-detector.ts:99` — `chunk.match(ALT_SCREEN_PATTERN)` でチャンク全体を正規表現走査
+
+### Phase 0: PGDDゲート解除
+
+- `pgdd-gate-check.js` は `state.mode` を参照せず `currentPhase` の allow/block のみで判定することを確認。既存の `"mode": "sparring"` はゲートに効いていなかった
+- `.pgdd/config.json` に `sparring-v4`（allow `["./"]` / block `[]`）を追加し、`currentPhase` を切替
+
+### Phase 1: Rustバックエンド新設（backend-rs/）
+
+技術選定: axum 0.8 + tokio + portable-pty 0.9 + tower-http(cors) + serde / uuid / time / regex / memchr / encoding_rs。
+環境: rustc 1.97.1 / MSVC Build Tools 2022。
+
+移植内容（Node版 933行 → Rust）:
+
+- `ring_buffer.rs`: `VecDeque<u8>` の真のリングバッファ化。追記を O(chunk) に（Node版の O(200KB)/チャンクを解消）。バイト切断に備え `utf8::trim_broken_prefix` でreplay先頭の不完全UTF-8を除去
+- `state_detector.rs`: RDD 7章の条件表を1:1移植。代替画面検知はチャンク全体の正規表現走査をやめ `memchr` でESC位置のみ照合。静止判定は tokio タスク（出力が無い間はCPU消費ゼロ）
+- `session_manager.rs`: PTY読み取りは専用スレッド、状態評価は tokio タスク、配信は broadcast。バッファのロックを保持したまま配信し、subscribe時のreplayとdataの取りこぼし・重複を防止
+- `ws/handler.rs`: WSをバイナリフレーム化（タグ1バイト+ペイロード）。PTY出力は5ms窓でコアレッシング
+- REST・Origin検証・許可リストは Node版と同一仕様で移植
+
+### 発見した既存バグ（Node版から引き継ぎ）: WSLログインシェルの誤検出
+
+- 症状: `GET /api/shells` が `Ubuntu-22.04 (bash)` を返す。実機の正解は zsh（`echo $SHELL` = `/usr/bin/zsh`）
+- 原因: 停止中のWSLディストロを起動する初回コマンドは実測で約10秒かかる（ウォーム時は約0.3秒）。Node版・Rust版とも `EXEC_OPTS.timeout = 5000ms` で必ずタイムアウトし、フォールバック（zsh→bash→sh の which）に落ちて誤検出していた
+- 実測: `wsl -d Ubuntu-22.04 -- sh -lc 'echo $SHELL'` = 10,716ms（コールド）/ 286ms（ウォーム）、`which zsh` = 272ms、`wsl -l -v` = 111ms
+- 修正: `COMMAND_TIMEOUT` を 20秒に延長し、ディストロごとの解決を `join_all` で並列化（コールドスタートを直列に積み上げない）
+- 結果: `Ubuntu-22.04 (zsh)` を正しく検出。起動所要は2秒（ウォーム時）
+
+### Phase 1 検証結果
+
+`cargo test` 71件 GREEN（状態判定条件表の4シナリオ＋優先順位、WSLパース、許可リスト、Origin検証、UTF-8境界、WSフレーム）。
+
+実機 REST 検証（Rust :3002）:
+
+| 検証項目 | 結果 |
+|---|---|
+| GET /api/health | 200 |
+| GET /api/shells（win32検出） | cmd / powershell / wsl-Ubuntu-22.04(zsh) / wsl-Ubuntu(bash)。pwsh未導入のため非掲載 |
+| POST（既定シェル / shell=wsl-Ubuntu-22.04） | 201 |
+| POST 許可リスト外（`/bin/evil`・存在しないid） | 400 |
+| PATCH リネーム（日本語11文字） | 200・一覧に反映 |
+| PATCH 空白のみ / title欠落 / 31文字 / 不正UUID | 400 |
+| DELETE | 200 / 不存在UUID 404 / 不正UUID 400 |
+| セッション上限16 → 17個目 | 429（`セッション数が上限（16）に達しています`） |
+| 非許可Origin | 403（レスポンス本文もNode版と完全一致） |
+
+Node版との差異:
+
+- `Content-Type` が `application/json`（Node版は `; charset=utf-8` 付き）。JSONはRFC 8259でUTF-8必須のため実害なし
+- `DELETE /api/sessions/../etc/passwd` が 404（Node版は400）。axumがパス正規化でルート不一致にするため。より安全側で、通常の不正UUID（`not-a-uuid`）は仕様どおり400
+
+### Phase 2: WSバイナリプロトコル切替
+
+- フロント `services/ws.ts` をバイナリフレーム化（タグ1バイト + ペイロード）。`types/index.ts` の `ServerMessage` の data を `Uint8Array` に変更し、`TerminalPanel.tsx` は `ws.binaryType='arraybuffer'` + `term.write(Uint8Array)` で xterm へ直接書き込む（両端の JSON エスケープ／パースを除去）
+- 送信フレームは `Uint8Array<ArrayBuffer>` を明示（TypeScript 5.7+ の `ArrayBufferLike` ジェネリクスにより `ws.send()` の型と不一致になるため）
+- frontend テスト 51件 GREEN（WS のバイナリ往復・境界値を追加）
+
+#### ブラウザ実機検証（Rust :3001 + Vite :5174）
+
+| 項目 | 結果 |
+|---|---|
+| PowerShell 入出力 | `echo RUST_OK_日本語テスト` が正しく往復。パスの日本語（浅野寛貴）も正常表示 |
+| WSL zsh | `Ubuntu-22.04 (zsh)` で起動し `.zshrc` を読込（スライムテーマの slime.txt 参照を確認）。RDD 9.5章 受け入れ基準5 |
+| 分割・状態可視化 | 左右分割、緑=待機／青=実行中 の遷移を確認 |
+| リロード復元 | 2セッション・レイアウト・出力履歴とも復元 |
+| 10万行出力 | 完走（52.2秒）。状態も idle へ正しく復帰 |
+
+参考値: PowerShell 単体の `1..100000` は列挙のみ 202ms / 文字列化まで 1,203ms。残りが PTY→WS→描画のコスト。Node版との比較測定は未実施。
+
+### 発見・修正: ConPTY の DSR にバックエンドが応答する
+
+- **症状**: 新規セッションを作ってもシェルが起動せず、status が running のまま。cmd.exe / WSL いずれも再現
+- **原因調査**: 読み取りスレッドにデバッグ出力を入れたところ、PTY から届くのは `\x1b[6n`（DSR = カーソル位置問い合わせ）4バイトのみだった。**ConPTY はこの問い合わせに応答があるまでシェルの出力を開始しない**。Node版ではブラウザの xterm が自動応答し、それが WS 経由で PTY に返ることで先へ進んでいた（＝クライアント未接続では起動しない構造だった）
+- **併発していた既存バグ**: リロード時、replay バッファ内の DSR に xterm が応答し、その `;1R` がプロンプトへ入力される
+- **対処（ユーザー選択）**: `src/pty/dsr.rs` を新設。`spawn_reader` が出力チャンクから `ESC[6n` を検出したらバックエンドが `ESC[1;1R` を PTY へ書き戻し、DSR 自体はクライアントへ送らない（xterm の二重応答を防ぐ）。DSR を含まないチャンクは `memchr::memmem` の検索のみでコピーせず素通しし、大量出力時のコストを増やさない
+- **検証**: WS 未接続のまま REST で cmd セッションを作成 → 4秒後に `status=idle` に到達。ブラウザを開かなくてもシェルが起動するようになった（Node版では不可能だった動作）
+- `cargo test` 78件 GREEN（dsr の 7件を追加）
+
+#### 作業事故と復旧
+
+重複していた `strip_dsr` を整理する際、`sed -i '253,305d'` の範囲指定を誤り `now_iso8601` / `spawn_reader` / `spawn_quiescence_watcher` / `spawn_pty` / `home_dir` を削除した。全て書き戻し、`cargo test` 78件 GREEN・関数一覧で復旧を確認済み。
+
+#### 並行セッションとの競合
+
+同名の別 Claude セッション（multiterm-rust-backend-optimization [3e7e0e]）が同じプロジェクトを並行編集しており、`session_manager.rs` に想定外の差分（`replay_consumed` 等）が現れた。以後はセッション間で連絡を取りながら分担する。
+
+## Phase 19: フロントエンド軽量化（React → Preact / 依存排除）
+
+### やったこと
+
+- **React 19 → Preact 10.29.8**。compat レイヤーは挟まず `preact` / `preact/hooks` を直接使用。`main.tsx` は `createRoot().render()` → `render()`、`tsconfig.app.json` に `jsxImportSource: "preact"` を追加
+- **shadcn/ui を全削除**。`ui/dropdown-menu.tsx`（267行）と `ui/tooltip.tsx`（57行）は調査の結果**どこからも import されていなかった**ため削除のみ。`ui/button.tsx`（67行）は使用中だったため `components/primitives/Button.tsx`（37行）へ置換し、cva / clsx / tailwind-merge / radix Slot を排除
+- **lucide-react（39MB）→ inline SVG 9個**（`components/icons.tsx`）。パスデータは lucide v1.26.0（ISC）の `__iconNode` から採取し、属性も lucide のデフォルト（viewBox 0 0 24 24 / stroke-width 2 / stroke-linecap round）に合わせた
+- `lib/utils.ts`（`cn`）削除。`index.css` から `tw-animate-css` / `shadcn/tailwind.css` / `@fontsource-variable/geist` の import を削除し、UIフォントはシステムフォントスタックへ
+- Preact の型差分に対応: `ReactNode` → `ComponentChildren`、`React.PointerEvent` → `JSX.TargetedPointerEvent`、`e.target.value` → `e.currentTarget.value`（3箇所）、Button の props を `JSX.IntrinsicElements['button']` に
+- `@preact/preset-vite` は Vite 8 / rolldown でビルドが通らないため使わず、tsconfig の `jsxImportSource` に委ねる構成にした
+
+### 効果測定（同一条件・ASCIIパスでのビルド実測）
+
+| 指標 | React 構成（移行前） | Preact 構成（移行後） | 削減 |
+|---|---|---|---|
+| JS バンドル | 708.66 kB（gzip 198.70 kB） | 482.68 kB（gzip 128.14 kB） | **-225.98 kB / gzip -70.56 kB（-35.5%）** |
+| CSS | 43.57 kB（gzip 8.55 kB） | 26.09 kB（gzip 5.70 kB） | -17.48 kB / gzip -2.85 kB（-33.3%） |
+| Webフォント | 76.41 kB（Geist woff2 × 5） | 0（システムフォント） | **-76.41 kB（-100%）** |
+| 初回転送量（gzip換算） | 283.66 kB | 133.84 kB | **-149.82 kB（-52.8%）** |
+| npm パッケージ数 | 581 | 251 | **-330（-56.8%）** |
+| node_modules | 303MB | 182MB | -121MB（-39.9%） |
+| package.json 依存 | deps 15 / devDeps 14 | deps 6 / devDeps 10 | -13 |
+| ビルド時間 | 922ms | 405ms | -56% |
+
+`npx tsc -b --noEmit` → exit 0 / `npx vitest run` → **51件 GREEN**。
+テストは全て純関数のテストで `@testing-library` を使っていなかったため、Preact 移行に伴う差し替えは不要だった。
+
+### 判明した問題: 非ASCIIパスで vite build が壊れる
+
+**現象**: プロジェクトの現在地（OneDrive 配下・日本語と全角中黒を含むパス）で `npm run build` すると
+`Rolldown failed to resolve import "preact"` で失敗する。dist は出力されるが**全ての node_modules 依存が
+external 化**され、`import ... from "preact"` `from "@xterm/xterm"` が残った壊れたバンドル（JS 22.3kB）になる。
+
+**切り分け結果**:
+
+| 構成 | パス | 結果 |
+|---|---|---|
+| React（移行前） | 日本語パス（OneDrive配下） | **成功**（708.66 kB） |
+| Preact（移行後） | 日本語パス（OneDrive配下） | **失敗** |
+| Preact（移行後） | ASCIIパス（C:\Temp\vt） | **成功**（482.68 kB） |
+
+除外できた原因: rolldown のネイティブバイナリは存在（`@rolldown/binding-win32-x64-msvc/*.node`）／
+`@preact/preset-vite` の有無は無関係（両方で再現）／`resolve.alias` の有無も無関係／`.vite` キャッシュ削除でも再現／
+`npm ci` で node_modules を作り直しても再現。
+
+`resolve.alias` で preact の実ファイル（`dist/preact.mjs` 等）を直接指すと preact は解決されるが、
+次は `@xterm/xterm` が解決できずに失敗する。つまり preact 固有ではなく **bare import 解決全般**が壊れている。
+preact の package.json exports に `default` 条件が無い（types/browser/umd/import/require のみ）ことが
+引き金になった可能性はあるが、React 構成が同じパスで通る理由までは特定できていない。
+
+**対処（ユーザー判断）**: (c) ビルド時だけ ASCII パスへ退避する。フォルダは移動せず、vite のバージョンも変えない。
+`scripts/start-windows.ps1` に「frontend を ASCII パスへコピー → build → dist を戻す」を組み込む。
+
+### 並行セッションでの作業分担
+
+このフェーズは2つの Claude セッションが並行して作業した。backend-rs は別セッションが担当し、
+本セッションは frontend のみを担当。境界を明示的に取り決めて競合を回避した
+（session_manager.rs で一度競合し、削除範囲を誤って関数が消える事故が起きたため）。
+
+## Phase 20: 単一バイナリ化（rust-embed）とDocker構成の廃止
+
+### Docker / Terraform の廃止（ユーザー判断）
+
+実際の利用が Windows ホスト直接起動のみだったため、Docker 構成そのものを廃止した。
+`terraform/`・ルートの `Dockerfile`・`frontend/Dockerfile`・`backend/Dockerfile` をごみ箱へ送付
+（git 管理下のため履歴から復元可能）。これにより RDD 8章の「Terraform + Docker provider で
+2コンテナ構築」は要件から外れる。
+
+廃止前に一度 1コンテナ構成への書き換え（nginx コンテナ削除・`backend_port`/`frontend_port` を
+`app_port` へ統一）まで実施し `terraform validate` は通していたが、廃止決定により削除した。
+
+### 非ASCIIパスで vite build が壊れる問題への対処
+
+**現象**: Preact 構成 + 日本語を含むパス（本プロジェクトは OneDrive 配下）で `vite build` すると、
+全依存が external 化された壊れたバンドルが出力される（JS 22KB、`from"preact"` `from"@xterm/xterm"`
+等の bare import が残存）。React 構成では同じパスでも成功するため、Preact 構成固有。
+
+**対処**: `scripts/build-frontend.ps1` を新設し、ビルド時だけ ASCII パスへ退避する。
+
+- 退避先は `C:\Temp\multiterm-frontend-build` 固定（`$env:TEMP` はユーザー名に日本語を含むため使えない）
+- `robocopy /MIR /XD node_modules dist .vite` でソースのみミラー。退避先の node_modules（182MB）を
+  残すことで、`npm ci` は package-lock.json のハッシュが変わった時だけ実行する
+- ビルド後、生成物に bare import が残っていないか `Select-String` で検査し、残っていれば throw する
+  （退避が効かなくなった場合に壊れた dist を配布しないため）
+- 生成物は `frontend/dist` へ robocopy で戻す
+
+実測: JS 497.06 kB (gzip 133.52 kB) / CSS 26.09 kB (gzip 5.70 kB) の正常なバンドルを確認。
+
+> **PowerShell の注意**: 日本語コメントを含む `.ps1` は UTF-8 **BOM 付き**で保存すること。
+> BOM が無いと PS 5.1 が ANSI として読み、コメントが化けて構文エラーになる（実際に踏んだ）。
+
+### rust-embed による静的配信
+
+`src/static_files.rs` を新設。`#[folder = "../frontend/dist"]` でビルド成果物をバイナリへ埋め込み、
+axum の `fallback` で配信する。SPA のため実ファイルが無いパスは `index.html` を返す。
+
+- release ビルドでは埋め込み、debug ビルドでは実ファイルを読む（`npm run build` し直せば再起動なしで反映）
+- **`frontend/dist` が存在しないと `cargo build` が通らない**。先に `scripts\build-frontend.ps1` が必要
+- `$CARGO_MANIFEST_DIR` は rust-embed で展開されないため、`../frontend/dist` の相対指定を使う
+
+### 単一プロセス・単一ポートでの動作確認
+
+| 検証 | 結果 |
+|---|---|
+| `GET /` | 200 `text/html` 463 bytes |
+| `GET /assets/index-*.js` | 200 `text/javascript` 497,062 bytes（正常なバンドル） |
+| `GET /api/health` | 200 |
+| `GET /api/shells` | 200 |
+| `GET /nonexistent` | 200 `text/html`（SPAフォールバック） |
+
+`cargo test` 78件 GREEN 維持。
+
+### 起動スクリプトの単一プロセス化
+
+- `scripts/start-windows.ps1`: Node版backendの起動と Vite 常駐を削除。`build-frontend.ps1` を呼んでから
+  `cargo build --release` → 生成した exe を起動するだけの構成に。`-Rebuild` / `-SkipBuild` を追加。
+  `ALLOWED_ORIGINS` は画面も同一ポートから配信するため `http://127.0.0.1:3001,http://localhost:3001` に変更
+- `MultiTerm起動.bat`: 待機ポートを 5174 → 3001。release ビルド（LTO）が数分かかるためブラウザ待機を
+  最大5分へ延長
+- `MultiTerm停止.bat`: 対象ポートを 3001 のみに
+
+### 効果測定（Node版との比較）
+
+| 指標 | Node版 | Rust版 | 削減 |
+|---|---|---|---|
+| 常駐プロセス数 | 2（node backend + vite） | **1**（multiterm-backend.exe） | -1 |
+| 公開ポート数 | 2（3001 + 5174） | **1**（3001） | -1 |
+| WorkingSet | 48.7MB + 41.8MB | **9.6MB** | -80.9MB |
+| PrivateMemory | 43.6MB + 190.2MB = 233.8MB | **2.1MB** | **-231.7MB（-99.1%）** |
+| フロント初回転送量(gzip) | 283.66 kB | 133.84 kB | -52.8%（Phase 3 実測） |
+| npmパッケージ数 | 581 | 251 | -56.8%（Phase 3 実測） |
+
+実行時の Node.js は不要になった（フロントのビルドにのみ使用）。
+
+### 同一オリジン化（接続先のハードコード解消）
+
+単一ポート配信にしたことで、フロントの接続先がビルド時の環境変数に依存するのが問題になった
+（`VITE_WS_URL` 未設定時のデフォルト `ws://127.0.0.1:3001` が焼き込まれ、`localhost:3001` で開くと
+WS が繋がらない）。`services/api.ts` は `location.origin`、`services/ws.ts` は `location.host` を
+既定にし、開発時のみ `VITE_*` で上書きする形に変更した。
+
+焼き直し後のバンドル検査: ハードコードされた接続先 0件、`location.host` / `location.origin` /
+`location.protocol` / `wss:` を検出、bare import なし。
+
+### 単一バイナリの実機検証（release）
+
+`cargo build --release` で 2分46秒、**バイナリ 4.25MB**（フロント込み）。
+`frontend/dist` が存在しない `C:\Temp\multiterm-release-test` へ exe だけをコピーして起動し、
+埋め込みが効いていることを確認した。
+
+| 検証（exe 1個のみの環境） | 結果 |
+|---|---|
+| `GET /` | 200 `text/html` 463 bytes |
+| `GET /assets/*.js` | 200 `text/javascript` 497,097 bytes |
+| `GET /assets/*.css` | 200 `text/css` 26,094 bytes |
+| `GET /favicon.ico` | 200 `image/x-icon` |
+| `GET /api/health`・`/api/shells` | 200 |
+| 非許可 Origin | 403（セキュリティ維持） |
+| 配信JSの bare import | 0件（正常なバンドル） |
+| メモリ | WorkingSet 8.2MB / Private 2.0MB |
+
+**exe 単体で完結**する（Node.js も dist も不要）。
+
+### ブラウザ実機検証（単一バイナリ配信 :3001、Vite不使用）
+
+| 検証 | 結果 |
+|---|---|
+| `http://localhost:3001` で新規セッション | WSL zsh 起動・`~>` プロンプト・`.zshrc` 読込・idle（緑枠）。**同一オリジン化により従来繋がらなかった経路が動作** |
+| `http://127.0.0.1:3001` | 同様に動作 |
+| 分割 | `Ubuntu-22.04 (zsh)` と `Windows PowerShell` を別シェルで同時稼働、両方 idle |
+| リロード復元 | 2ペイン構成・出力・状態色すべて復元。`;1R` の混入なし |
+| 古いレイアウトの整合 | 存在しないセッションIDの葉ノードが自動削除され「ターミナルがありません」表示（RDD 7章: バックエンドがSSOT） |
+| コンソール | エラー0件・警告0件 |
+
+### 運用上の注意（開発時に踏んだもの）
+
+- `run_in_background` で起動したバックエンドは**ターン終了時に kill される**。検証用に常駐させるなら
+  `Start-Process -WindowStyle Minimized` で親から独立させること（3回落として原因を誤認しかけた）
+- 日本語コメントを含む `.ps1` は UTF-8 **BOM 付き**で保存すること（PS 5.1 が ANSI 解釈して構文エラーになる）
+
+## Phase 21: 左サイドバー（herdr のエージェント状態可視化を踏襲）
+
+### 背景
+
+ユーザー要望「[herdr](https://github.com/herdrdev) のヘッダーの有効な部分を踏襲」「左サイドバーでタブ管理・AIの状態・ステータスが分かるようにしてほしい」。
+
+### 調査した herdr の設計
+
+- 左サイドバーに全ペインを一覧し、AIエージェントの状態を表示する
+- 状態は **blocked**（入力・承認待ち）/ **working**（実行中）/ **done**（完了・未確認）/ **idle**（確認済み）/ unknown の5段階
+- 状態は上位（tab → workspace）へ集約され、1つでも blocked があれば全体が blocked に見える
+- **done は「見るまで」残る**。これがタブを切り替えずに複数エージェントを監視できる理由
+
+出典: [公式docs](https://herdr.dev/ja/docs/concepts/) / [Better Stack](https://betterstack.com/community/guides/ai/herdr-ai-agent/) / [技術ブログ](https://syusodo.co.jp/tech-blog/articles/repo-ogulcancelik-herdr)
+
+### 採用しなかったもの（判断）
+
+| 論点 | 判断 | 理由 |
+|---|---|---|
+| herdr の workspace / tab 階層 | **導入しない** | MultiTerm は二分木分割モデルで、RDD 6章がタブ機能をスコープ外と定義。「タブ管理」は既存ターミナル一覧の管理として実装した |
+| herdr の色（赤=blocked / 黄=working / 青=done） | **採用しない** | RDD 5章6項が青=実行中・黄=入力待ち・緑=待機を定義済み。既存色を維持し、done にだけシアンを新規割当 |
+| SessionStatus への done 追加 | **しない** | バックエンドの状態モデル（RDD 7章）は変更せず、done はフロント側の「見たかどうか」で合成する |
+
+### 実装
+
+- `features/status/pane-state.ts`（新規・純関数）
+  - `resolvePaneState(status, unseen)`: SessionStatus + 未確認フラグ → PaneState
+  - `aggregatePaneState(states)`: blocked > working > done > idle の順で最も強い状態を返す
+  - `countPaneStates` / `paneDotClasses` / `paneStateLabel`
+  - `shouldMarkDone({ status, previous, isActive, runningMs })`: 完了として記録すべきかの判定
+- `components/Sidebar.tsx`（新規）: 状態ドット + Alt番号 + タイトル + シェル + 状態ラベルの一覧。クリックで切替、行から閉じる、上部に「入力待ち N / 実行中 N / 完了 N」
+- `components/Workspace.tsx`: サイドバー配置、状態集約、ヘッダーにサイドバー開閉ボタンと集約バッジ
+- `components/TerminalPanel.tsx`: `onStatusChange` で状態を親へ通知。狭い時に折り返していたヘッダーを truncate に（サイドバーで幅が減って顕在化）
+- `components/icons.tsx`: `PanelLeft` を追加（lucide は Phase 3 で削除済みのため自作）
+
+### 実装中に見つけて直したバグ
+
+1. **最初から待機のターミナルが「完了」と誤判定される**
+   初回の idle イベントで done にしていた。実行中→待機の遷移時のみに限定して解消。
+2. **リロードのたびに全ターミナルが「完了（未確認）」になる**
+   WS 再接続時の `resize` 送信で PTY が再描画し、`running` が一瞬立って `running→idle` の遷移が成立していた。
+   `MIN_RUNNING_MS = 1000` を導入し、1秒未満の実行は完了に数えないようにして解消。
+
+### 検証
+
+`npx tsc -b --noEmit` → exit 0 / `npx vitest run` → **69件 GREEN**（51 → 69。pane-state のテスト18件を追加）。
+
+ブラウザ実機（Vite :5174 + backend :3001）:
+
+| 検証 | 結果 |
+|---|---|
+| サイドバー表示 | ターミナル一覧・状態ドット・Alt番号・シェル名・状態ラベルが表示 |
+| クリック切替 | サイドバー行クリックで該当ペインがアクティブ化・フォーカス移動 |
+| 実行中の反映 | zsh で `sleep 25` 実行 → サイドバーが青ドット「実行中」、ヘッダーに集約バッジ |
+| 完了（未確認）の検出 | 別ペインを見ている間に PowerShell で `Start-Sleep 4` → シアンドット「完了（未確認）」、ヘッダーも集約表示 |
+| 未確認の解除 | その行をクリック → 「待機」に戻り、集約バッジが消える |
+| 集約 | サイドバー上部に「実行中 1 / 完了 1」等のカウント。すべて待機なら「すべて待機」 |
+| コンソール | エラー0件 |
+
+### 残っている作業（担当セッション終了により未着手）
+
+backend-rs 担当セッションが終了したため、以下はユーザー許可待ちのまま残っている:
+- RDD.md / README.md の改訂（Rust構成・Docker廃止・サイドバー機能の反映）
+- Node版 `backend/` の削除
+- **`frontend/dist` の再ビルド**（サイドバーの変更が未反映。`scripts/build-frontend.ps1` で焼き直しが必要）
+
+## Phase 22: dist焼き直し・Node版削除・ドキュメント改訂（2026-08-31）
+
+### frontend/dist の焼き直し
+
+`scripts\build-frontend.ps1` を実行し、サイドバー（Phase 6）を含むバンドルを生成。
+
+```
+dist/assets/index-DL40YSgj.css   28.48 kB │ gzip:  6.11 kB
+dist/assets/index-b4tMAnPW.js   501.76 kB │ gzip: 135.03 kB
+✓ built in 731ms
+```
+
+検証:
+- 未解決の bare import（`from"preact"` / `from"@xterm/"`）: **0件**（スクリプトの検知も通過）
+- サイドバーのコードが含まれること: 「ターミナル一覧」「完了（未確認）」「サイドバーを閉じる」「入力待ち」の各文字列を確認
+- 単一バイナリ配信（`http://localhost:3001`）でサイドバー表示・2セッション復元・状態表示を実機確認。コンソールエラー0件
+
+### 削除
+
+| 対象 | 状態 |
+|---|---|
+| `backend/`（Node版、163MB） | ごみ箱へ移動。git 追跡28ファイルのため履歴は残る |
+| `frontend/.dockerignore` | ごみ箱へ移動（Docker廃止のため） |
+| `terraform/` | 前セッションが削除済み |
+| `Dockerfile` 群 | 前セッションが削除済み |
+
+削除前に `backend-rs` / `scripts` からの参照が無いことを確認。削除後に `cargo test` 78件・`vitest` 69件が GREEN であることを確認済み。
+
+### ドキュメント改訂
+
+**README.md**（133行 → 191行）: 単一バイナリ構成へ全面改訂。
+- Terraform/Docker のセットアップ手順を削除し、`MultiTerm起動.bat` / `start-windows.ps1` による起動手順へ
+- サイドバーの説明（状態4段階の意味・完了が見るまで残ること・1秒未満の実行を数えない理由）を追加
+- WebSocketバイナリプロトコルのフレーム表を追加
+- 技術スタックを Rust + axum + portable-pty + rust-embed / Preact へ更新
+- 移行前後の実測値表を追加（常駐メモリ 233.8MB → 2.1MB 等）
+- 非ASCIIパスでビルドが壊れる制約と回避策を明記
+
+**RDD.md**（209行 → 321行）: 要件は残しつつ v4 の変更を反映。
+- 4章の技術スタックを Rust 構成へ改訂し、旧構成を 4.1 に参考として残した
+- 5章に13〜15項（単一プロセス配信・WSバイナリプロトコル・サイドバー）を追加
+- 6章の除外機能に「Docker/Terraform によるコンテナ構築（v4で廃止）」を追加。タブ機能がスコープ外である点は維持し、v4のサイドバーが階層を導入しないことを明記
+- 8章のネットワーク公開ポリシーを単一ポート構成へ改訂。フロントの接続先が配信元オリジンに追従する要件を追加
+- **10章（新規）**: WebSocketバイナリプロトコル。フレーム形式・UTF-8境界・DSR自動応答・受け入れ基準
+- **11章（新規）**: ターミナル一覧サイドバー。表示内容・ペイン状態の4段階・集約規則・完了判定の条件・受け入れ基準
+
+### 現在の構成
+
+```
+multiterm/
+├── backend-rs/     Rust バックエンド（PTY + WS + 静的配信）
+├── frontend/       Preact フロントエンド
+├── scripts/        build-frontend.ps1 / start-windows.ps1
+├── MultiTerm起動.bat / MultiTerm停止.bat
+├── RDD.md / README.md / BUILDLOG.md / NEXTSTEP.md
+└── .pgdd/
+```
+
+テスト実績: cargo test **78件** / vitest **69件** GREEN。
+
+## Phase 23: エージェント別の状態判定（herdr のスクリーンマニフェスト方式を踏襲）
+
+### 背景
+
+ユーザーからの問い「herdr と Claude Code の入力状態の判定は同じか」。調査の結果、**同じではなく herdr の方が厳格**だった。
+
+| | herdr | MultiTerm（変更前） |
+|---|---|---|
+| 方式 | ①ライフサイクルフック ②**スクリーンマニフェスト**（フォアグラウンドプロセスを識別し専用TOMLで画面下部を照合。OSCも見る） ③ソケットAPI | 汎用正規表現 + 「代替画面で静止＝入力待ち」 |
+| blocked の条件 | **既知の承認・質問・許可UIに一致したときだけ** | 代替画面で静止すれば無条件 |
+| Claude Code | スクリーンマニフェストで対応 | エージェント固有の知識なし |
+
+出典: [herdr docs / agents](https://herdr.dev/ja/docs/agents/)
+
+変更前の問題: Claude Code が作業を終えて入力を待っているだけでも「入力待ち（黄）」になり、承認を求めている状態と区別できない。分割が多いと本当に対応が必要なペインが埋もれる。
+
+### 実測した画面（推測ではなく実機から採取）
+
+稼働中の Claude Code セッションの replay バッファを読み、待機画面の実データを取得した。
+
+```
+ ▐▛███▛█   Claude Code v2.1.251
+▝▜██████▀  Opus 5 (1M context) with xhigh effort · Claude Team
+  ▝▝ ▝▝    C:\Users\浅野寛貴
+  ⏵⏵ auto mode on (shift+tab to cycle)
+  ⚠ Transcript saving is off — inherited CLAUDE_CODE_CHILD_SESSION marker
+───────────────────────────────（罫線1行が200文字超）
+❯
+```
+
+承認UIの文言は Claude Code の公開ドキュメント・issue から確認した
+（[permissions](https://code.claude.com/docs/en/permissions) / [issue #4421](https://github.com/anthropics/claude-code/issues/4421)）。
+
+### 実装（backend-rs/src/monitor/state_detector.rs）
+
+- `Agent` enum と `detect_agent(screen)`: 代替画面に入っているセッションに限り、画面テキストから識別する。
+  目印は `Claude Code v<数字>` / `for shortcuts` / `auto mode on (shift+tab to cycle)`。
+  識別はセッションごとに一度だけ行い以後保持する（毎チャンクの走査はしない）
+- `classify_agent_screen(agent, screen)`: 承認・選択のパターンに一致すれば waiting-input、無ければ idle
+- `AGENT_TAIL_LIMIT = 8192`: 承認UIは罫線とともに画面下部へ描かれるため、従来の末尾512バイトでは選択肢まで届かない。
+  エージェント識別後のみ8KBを保持する（評価は静止時のみなので常時コストは増えない）
+- `evaluate()`: エージェント識別済み → 専用判定 / 未識別のTUI → 従来どおり静止＝入力待ち / 通常画面 → 7章の末尾行判定
+
+### 検証
+
+`cargo test` **88件 GREEN**（78 → 88。エージェント判定10件を追加）。テストには実機から採取した画面データを使用。
+
+実機検証（バックエンドを通した状態遷移の観測）:
+
+| ケース | 画面 | 結果 | 変更前 |
+|---|---|---|---|
+| A | 承認UIでもプロンプトでもない末尾（`Working on the task`） | **idle** | waiting-input |
+| B | 承認UI（`Do you want to proceed?` + 3択） | **waiting-input** | waiting-input |
+
+A が idle になったことがエージェント識別の効いている証拠。変更前は代替画面で静止すれば無条件に入力待ちだった。
+
+なお実機の `claude` 起動は `Accessing workspace...` で長時間止まり完了しなかったため、
+Claude Code の画面を模した出力を PTY へ流して判定経路を検証した（判定はバックエンドを通っている）。
+
+### ドキュメント
+
+RDD.md に **12章「エージェント別の状態判定」** を追加（背景・識別方法・判定表・承認パターン・末尾バッファ・受け入れ基準）。
+
+## Phase 24: ターミナルの発色を Windows Terminal に合わせる
+
+### 背景
+
+ユーザーからの指摘「ターミナルで開いたときは色あるけどこっちは色ない」。
+
+まず**色が出ているか**を実測した。PTY出力に PSReadLine の構文ハイライト（`ESC[93m` 黄・`ESC[36m` シアン・`ESC[92m` 緑）が
+含まれていること、`TERM=xterm-256color` / `SupportsVirtualTerminal=True` / PSReadLine 2.0.0 読込済み /
+`$PROFILE` も読まれている（`shiori` 関数が使える）ことを確認。`Write-Host -ForegroundColor` で
+RED/GREEN/CYAN/YELLOW がすべて着色されることも画面で確認した。**色は出ていた。**
+
+`PS C:\Users\...>` が白いのは PowerShell 5.1 の既定プロンプトが無色だからで、Windows Terminal でも同じ。
+
+### 原因（実データで確定）
+
+既定の ANSI 16色パレットが両者で違っていた。
+
+| | 既定パレット | 確認方法 |
+|---|---|---|
+| xterm.js 6.0.0 | **Tango**（GNOME Terminal 由来） | `node_modules/@xterm/xterm/lib/xterm.js` から色コードを抽出 |
+| Windows Terminal | **Campbell** | settings.json に colorScheme 指定なし＝既定 |
+
+`XTERM_THEMES` は background / foreground / cursor の3色しか指定しておらず、16色は xterm.js の既定（Tango）のままだった。
+Tango は暗い色が多く、背景 `#0a0a0a` では沈んで「色が付いていない」ように見える。
+
+| 色 | Tango（変更前） | Campbell（変更後） |
+|---|---|---|
+| green | `#4e9a06` 暗い黄緑 | `#13A10E` 鮮やかな緑 |
+| blue | `#3465a4` くすんだ青 | `#0037DA` 濃い青 |
+| cyan | `#06989a` 暗い青緑 | `#3A96DD` 明るい水色 |
+| red | `#cc0000` | `#C50F1F` |
+| brightGreen | `#8ae234` | `#16C60C` |
+
+### 実装
+
+`frontend/src/components/TerminalPanel.tsx` に `CAMPBELL_ANSI`（16色）を追加し、dark テーマへ展開。
+
+- 背景・前景・カーソルはアプリの配色（`#0a0a0a` / `#e5e5e5`）を維持し、**16色だけ**を差し替えた
+- light テーマは白背景で Campbell の明色が視認しづらいため**変更しない**
+- 色値の出典: [Microsoft Learn / Windows Terminal color schemes](https://learn.microsoft.com/en-us/windows/terminal/customize-settings/color-schemes)
+
+### 検証
+
+`npx tsc -b --noEmit` → exit 0 / `npx vitest run` → **69件 GREEN**。
+
+実機で ANSI 30-37（通常色）と 90-97（明色）を並べて出力し、画面で発色を確認:
+
+- `NORMAL34`（青）がくすんだ青から**濃い青**へ
+- `NORMAL36`（シアン）が暗い青緑から**明るい水色**へ
+- `NORMAL32`（緑）が暗い黄緑から**鮮やかな緑**へ
+
+dist を焼き直し（JSハッシュ `b4tMAnPW` → `DkLTBkJ7`）、release バイナリへ反映した。
+
+## Phase 25: 起動時間の短縮（シェル検出をサーバ起動から分離）
+
+### 症状
+
+`MultiTerm起動.bat` を実行してもポートが開かず「起動できない」状態になる。
+
+### 原因
+
+`main.rs` が `detect_available_shells()` を **await してから** listen していた。
+Phase 18 で WSL の誤検出を直すため `COMMAND_TIMEOUT` を 5秒→20秒 に延ばしたことで、待ち時間が伸びていた。
+
+実測:
+
+| WSLの状態 | listening までの所要 |
+|---|---|
+| ウォーム | 7秒 |
+| コールド | 20秒以上（WSL起動が実測10秒 × タイムアウト20秒） |
+
+`MultiTerm起動.bat` は最大5分待つ作りなので最終的には開くが、その間ウィンドウが無反応になる。
+
+### 実装
+
+**サーバ起動と外部コマンド実行を分離した。**
+
+- `immediate_shells()` を追加。外部コマンドを起動せずに用意できるシェルだけを返す
+  （Windows: cmd / powershell、Unix: 実在確認のみで済む bash / zsh / fish / sh）
+- `main()` はこの一覧で即座に listen し、pwsh / WSL の検出は `tokio::spawn` で背後に回す
+- `ShellRegistry`（`RwLock<Vec<ShellInfo>>` + `AtomicBool`）を新設し、検出完了時に差し替える
+- `GET /api/shells` はレスポンスヘッダ `x-shell-detection: detecting | complete` で状況を返す。
+  envelope の形は変えない。CORS の `expose_headers` に含め、開発モード（別オリジン）からも読めるようにした
+- フロントは `detecting` の間 2秒間隔で取り直す（上限20回）。
+  localStorage の既定シェルを許可リストと突き合わせる矯正処理は**検出完了後にのみ**行う
+  （検出途中の不完全な一覧で矯正すると、WSLを既定にしていた設定が消えるため）
+
+### 検証
+
+`cargo test` **88件** / `vitest` **71件**（69→71。検出中/完了のヘッダ解釈テストを追加）GREEN。
+
+実機:
+
+| 項目 | 結果 |
+|---|---|
+| listening までの所要 | **0〜1秒**（7秒から短縮） |
+| 起動直後の `GET /api/shells` | `x-shell-detection: detecting` / cmd・powershell（208 bytes） |
+| 検出完了後 | `x-shell-detection: complete` / cmd・powershell・wsl-Ubuntu-22.04・wsl-Ubuntu（448 bytes） |
+| ログ | `listening on 127.0.0.1:3001 (shells: cmd, powershell)` → `shell detection finished (shells: cmd, powershell, wsl-Ubuntu-22.04, wsl-Ubuntu)` |
+
+RDD.md に **13章「起動時間とシェル検出の分離」** を追加。
+
+### 調査時の注意（踏んだもの）
+
+`cargo test` はテストバイナリしかビルドしないため、`target/debug/multiterm-backend.exe` を直接起動すると
+**古いバイナリが動く**。ヘッダが出ずに実装を疑ったが、`cargo build` し直したら正しく出た。
+
+## Phase 26: PTYへ渡す環境変数の修正（色が出ない根本原因）
+
+### 症状
+
+Phase 24 で ANSI 16色を Campbell に揃えたのに、Claude Code のロゴが白一色のままだった。
+
+### 原因
+
+**`NO_COLOR=1` が PTY の子プロセスへ引き継がれていた。**
+
+Claude Code のロゴ部分の生データを調べたところ、色指定（SGR）が**一つも含まれていなかった**。
+
+```
+ESC[2;2H ▐▛███▛█ ESC[3C Claude ESC[1C Code ESC[1C v2.1.252
+```
+
+`has256: false` / `hasTrueColor: false`。つまり xterm.js の描画ではなく、**アプリが色を出していなかった**。
+
+PTY内の環境変数を調べた結果:
+
+| 変数 | 値 | 出所 |
+|---|---|---|
+| `NO_COLOR` | **`1`** | プロセス環境のみ（ユーザー/システム環境変数には無い＝MultiTermを起動した親から継承） |
+| `COLORTERM` | 空 | Windows Terminal では `truecolor` が入る |
+| `TERM` | `xterm-256color` | 設定済み |
+
+[NO_COLOR 規約](https://no-color.org/) により、この変数があるとアプリは色出力を抑止する。
+`spawn_pty` は環境を明示的に整えていなかったため、親の値がそのまま子まで伝播していた。
+
+### 実装
+
+`session_manager.rs` の `spawn_pty` で PTY 起動時に:
+
+- `command.env("COLORTERM", "truecolor")` — 24bit色を使える環境であることを伝える（Windows Terminal と同条件）
+- `command.env_remove("NO_COLOR")` — 親から継承した値をターミナルの子プロセスへ持ち込まない
+
+`TERM=xterm-256color` は据え置き。
+
+### 検証
+
+`cargo test` **88件 GREEN**。
+
+**親プロセスに `NO_COLOR=1` を設定して起動**した状態で、PTY内の環境を確認:
+
+```
+TERM=[xterm-256color]  COLORTERM=[truecolor]  NO_COLOR=[]  NOCOLOR_SET=[False]
+```
+
+同じ状態で `claude` を起動し、出力に TrueColor エスケープが含まれること（`hasTrueColor: true`。修正前は `false`）を確認。
+画面でも Claude Code の信頼確認画面が着色されることを確認した（`Accessing workspace:` がオレンジ、選択中項目が青、
+`Security guide` がリンク色。修正前は同じ画面が白一色）。
+
+### 補足
+
+Phase 24 の Campbell パレット適用自体は正しく効いていたが、アプリが色を出していなかったため見えていなかった。
+16色パレット（Campbell）と、アプリに色を出させる環境変数の両方が揃って初めて Windows Terminal と同じ見た目になる。

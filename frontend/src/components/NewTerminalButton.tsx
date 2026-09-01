@@ -1,6 +1,6 @@
-import { useState } from 'react';
-import { ChevronDown, Plus } from 'lucide-react';
-import { Button } from '@/components/ui/button';
+import { useState } from 'preact/hooks';
+import { ChevronDown, Plus } from './icons';
+import { Button } from './primitives/Button';
 import type { ShellInfo } from '../types';
 
 interface NewTerminalButtonProps {
@@ -29,12 +29,12 @@ export function NewTerminalButton({ shells, defaultShellId, onCreate }: NewTermi
         title={`新規ターミナル（${defaultLabel}）`}
         onClick={() => onCreate(defaultShellId)}
       >
-        <Plus data-icon="inline-start" />
+        <Plus />
         新規ターミナル
       </Button>
       <Button
-        size="sm"
-        className="rounded-l-none border-l border-l-primary-foreground/20 px-1.5"
+        size="icon-sm"
+        className="rounded-l-none border-l border-l-primary-foreground/20"
         aria-label="シェルの種類を選択"
         aria-expanded={open}
         title="シェルの種類を選択"

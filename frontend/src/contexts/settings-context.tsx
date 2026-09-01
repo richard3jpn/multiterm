@@ -1,5 +1,6 @@
-import { createContext, useCallback, useContext, useEffect, useState } from 'react';
-import type { ReactNode } from 'react';
+import { createContext } from 'preact';
+import type { ComponentChildren } from 'preact';
+import { useCallback, useContext, useEffect, useState } from 'preact/hooks';
 import {
   DEFAULT_SETTINGS,
   clampFontSize,
@@ -18,7 +19,7 @@ interface SettingsContextValue {
 const SettingsContext = createContext<SettingsContextValue | null>(null);
 
 /** ターミナル表示設定（RDD 9.1章）・既定シェル選択（RDD 9.2章）。localStorageへ永続化 */
-export function SettingsProvider({ children }: { children: ReactNode }) {
+export function SettingsProvider({ children }: { children: ComponentChildren }) {
   const [settings, setSettings] = useState<TerminalSettings>(loadSettings);
 
   useEffect(() => {

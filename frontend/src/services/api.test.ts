@@ -3,10 +3,15 @@ import { createSession, deleteSession, fetchSessions, fetchShells, renameSession
 
 const envelope = (data: unknown) => ({ success: true, data, error: null });
 
-const mockFetch = (status: number, body: unknown): ReturnType<typeof vi.fn> => {
+const mockFetch = (
+  status: number,
+  body: unknown,
+  headers: Record<string, string> = {},
+): ReturnType<typeof vi.fn> => {
   const fn = vi.fn().mockResolvedValue({
     ok: status >= 200 && status < 300,
     status,
+    headers: { get: (name: string) => headers[name.toLowerCase()] ?? null },
     json: () => Promise.resolve(body),
   });
   vi.stubGlobal('fetch', fn);
@@ -42,8 +47,20 @@ describe('REST APIクライアント', () => {
   it('fetchShells: 許可リストを返す（RDD 9.2章）', async () => {
     const shells = [{ id: 'bash', label: 'Bash', path: '/bin/bash' }];
     const fn = mockFetch(200, envelope(shells));
-    await expect(fetchShells()).resolves.toEqual(shells);
+    await expect(fetchShells()).resolves.toEqual({ shells, detecting: false });
     expect(fn.mock.calls[0][0]).toContain('/api/shells');
+  });
+
+  it('fetchShells: 検出中はヘッダで通知される（一覧が増える可能性がある）', async () => {
+    const shells = [{ id: 'cmd', label: 'コマンドプロンプト', path: 'cmd.exe' }];
+    mockFetch(200, envelope(shells), { 'x-shell-detection': 'detecting' });
+    await expect(fetchShells()).resolves.toEqual({ shells, detecting: true });
+  });
+
+  it('fetchShells: 検出完了なら detecting は false', async () => {
+    const shells = [{ id: 'cmd', label: 'コマンドプロンプト', path: 'cmd.exe' }];
+    mockFetch(200, envelope(shells), { 'x-shell-detection': 'complete' });
+    await expect(fetchShells()).resolves.toEqual({ shells, detecting: false });
   });
 
   it('createSession: shellId指定時はボディに含める、省略時は空ボディ', async () => {

@@ -365,6 +365,19 @@
         "verify": "test -f README.md && grep -q 'Windowsホスト' README.md && grep -q '\\[docs-v3\\] 完了' BUILDLOG.md && grep -q 'v3全フェーズ完了' NEXTSTEP.md"
       },
       "adversaryReview": false
+    },
+    {
+      "id": "sparring-v4",
+      "name": "軽量化（Rust化）sparring",
+      "allow": [
+        "./"
+      ],
+      "block": [],
+      "completionCondition": {
+        "description": "軽量化の全Phase完了: Rustバックエンド新設 / WSバイナリプロトコル / Preact移行・依存削減 / rust-embed単一バイナリ+Docker1コンテナ化 / 起動スクリプト・ドキュメント更新とNode版削除。BUILDLOG.md に記録すること。",
+        "verify": "test -f backend/Cargo.toml && grep -q '\\[sparring-v4\\] 完了' BUILDLOG.md"
+      },
+      "adversaryReview": false
     }
   ]
 }

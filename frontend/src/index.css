@@ -1,13 +1,10 @@
 @import "tailwindcss";
-@import "tw-animate-css";
-@import "shadcn/tailwind.css";
-@import "@fontsource-variable/geist";
 
 @custom-variant dark (&:is(.dark *));
 
 @theme inline {
-    --font-heading: var(--font-sans);
-    --font-sans: 'Geist Variable', sans-serif;
+    /* UIフォントはシステム内蔵のものを使う（可変フォントの読み込みを避ける） */
+    --font-sans: ui-sans-serif, system-ui, "Segoe UI", "Yu Gothic UI", sans-serif;
     --color-sidebar-ring: var(--sidebar-ring);
     --color-sidebar-border: var(--sidebar-border);
     --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
