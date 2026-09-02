@@ -196,7 +196,11 @@ export function TerminalPanel({
 
   // Alt+数字などでアクティブ化されたら実際のキーボードフォーカスを端末へ移す（RDD 9.6章）
   useEffect(() => {
-    if (active) termRef.current?.focus();
+    if (!active) return;
+    // 名前編集中は端末へフォーカスを移さない。移すと入力欄がblurして編集が中断される
+    // （サイドバーで未選択の行をダブルクリックしたとき、選択と編集開始が同時に起きる）
+    if (document.activeElement instanceof HTMLInputElement) return;
+    termRef.current?.focus();
   }, [active]);
 
   // RDD 9.1章: フォント設定の即時反映（再作成不要。オプション更新+再フィット）
@@ -209,6 +213,16 @@ export function TerminalPanel({
   }, [settings.fontFamilyId, settings.fontSize]);
 
   const committingRef = useRef(false);
+  // Escapeで閉じるとinputがDOMから外れてblurが走る。state更新は非同期で間に合わないため、
+  // フラグでblur側の保存を止める
+  const cancelledRef = useRef(false);
+  const titleInputRef = useRef<HTMLInputElement>(null);
+
+  // 編集開始時にフォーカスを入力欄へ移す。autoFocusだけでは
+  // 直前にアクティブ化されたxtermがフォーカスを保持したままになる
+  useEffect(() => {
+    if (editing) titleInputRef.current?.focus();
+  }, [editing]);
   const commitRename = async () => {
     if (committingRef.current) return; // Enter + blur の二重発火を抑止
     const title = sanitizeTitle(draftTitle);
@@ -256,19 +270,29 @@ export function TerminalPanel({
         <span
           className={`inline-block size-2 rounded-full ${connected ? statusDotClasses(status) : 'bg-gray-500'}`}
         />
+        {/* keyを分けないと、Preactが入力欄と表示ボタンの子要素を再利用して壊す */}
         {editing ? (
           <input
+            key="editor"
+            ref={titleInputRef}
             autoFocus
             value={draftTitle}
             maxLength={60}
-            onChange={(e) => {
+            onInput={(e) => {
               setDraftTitle(e.currentTarget.value);
               setRenameError(false);
             }}
-            onBlur={() => void commitRename()}
+            onBlur={() => {
+              if (cancelledRef.current) {
+                cancelledRef.current = false;
+                return;
+              }
+              void commitRename();
+            }}
             onKeyDown={(e) => {
               if (e.key === 'Enter') void commitRename();
               if (e.key === 'Escape') {
+                cancelledRef.current = true;
                 setDraftTitle(session.title);
                 setEditing(false);
                 setRenameError(false);
@@ -281,10 +305,14 @@ export function TerminalPanel({
           />
         ) : (
           <button
+            key="title"
             type="button"
             className="cursor-text truncate text-xs font-medium hover:underline"
-            title="クリックして名前を変更"
-            onClick={() => {
+            title="ダブルクリックして名前を変更"
+            // mousedownで開くと後続のmouseup/clickが元のボタン位置に届いて
+            // inputがblurし即座に閉じる。マウス操作の最後に来るdblclickで開く
+            onDblClick={() => {
+              cancelledRef.current = false; // 前回の編集で立ったフラグを持ち越さない
               setDraftTitle(session.title);
               setEditing(true);
             }}

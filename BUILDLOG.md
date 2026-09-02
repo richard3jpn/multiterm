@@ -946,3 +946,194 @@ TERM=[xterm-256color]  COLORTERM=[truecolor]  NO_COLOR=[]  NOCOLOR_SET=[False]
 
 Phase 24 の Campbell パレット適用自体は正しく効いていたが、アプリが色を出していなかったため見えていなかった。
 16色パレット（Campbell）と、アプリに色を出させる環境変数の両方が揃って初めて Windows Terminal と同じ見た目になる。
+
+---
+
+## Phase 27: サイドバーの幅をドラッグで変更（2026-09-02）
+
+### 背景
+
+サイドバーの幅が `Sidebar.tsx` の `w-56`（224px）でハードコードされており変更できなかった。
+ターミナル名やシェル名が長いと truncate され（`Windows Power...`）、逆に短い名前ばかりのときは横幅が無駄になる。
+
+折りたたみ自体は Phase 21 で実装済み（ヘッダの PanelLeft ボタン）。今回追加したのは以下の2点。
+
+1. 境界線ドラッグによる幅の変更
+2. 幅と開閉状態の localStorage 永続化（従来はリロードすると必ず開いた状態・既定幅に戻っていた）
+
+### 実装
+
+既存の仕組みをそのまま踏襲し、新しい方式は持ち込んでいない。
+
+| 要素 | 踏襲元 |
+|---|---|
+| ドラッグ処理 | `SplitPane.tsx` — `pointerdown` で `window` に `pointermove`/`pointerup` を張り、`pointerup` で自ら外す |
+| 永続化 | `features/settings/settings.ts` — clamp + load/save の純関数、`try/catch` で既定値へフォールバック |
+| 保存タイミング | `Workspace.tsx` の layout 保存と同じ `useEffect` 方式 |
+| 境界線の見た目 | `SplitPane.tsx` — `role="separator"` + `bg-border hover:bg-primary/60` + `cursor-col-resize` |
+
+**新規** `frontend/src/features/sidebar/sidebar-state.ts`（46行）
+
+```ts
+const STORAGE_KEY = 'multiterm.sidebar.v1';
+export const SIDEBAR_WIDTH_MIN = 160;   // タイトルとシェル名が読める下限
+export const SIDEBAR_WIDTH_MAX = 480;   // ターミナル領域を圧迫しない上限
+export const DEFAULT_SIDEBAR_WIDTH = 224; // 従来の w-56 と同値
+
+export interface SidebarState {
+  readonly width: number;
+  readonly open: boolean;
+}
+```
+
+`clampSidebarWidth` / `loadSidebarState` / `saveSidebarState` は `settings.ts` の
+`clampFontSize` / `loadSettings` / `saveSettings` と同形。
+
+**変更** `Sidebar.tsx`
+
+- props に `width: number` を追加
+- `w-56` と `border-r` を外し `style={{ width: \`${width}px\` }}` に。
+  `border-r` を外したのは、隣に置くドラッグ用 separator が境界線を兼ねるため（二重線の回避）
+
+**変更** `Workspace.tsx`
+
+- `sidebarOpen: boolean` を `sidebar: SidebarState` に置き換え（初期値は `loadSidebarState`）
+- 保存の `useEffect` を追加
+- `handleSidebarPointerDown` を追加。`contentRef`（サイドバー＋ターミナル領域）の左端を基準に
+  `clientX - rect.left` を幅とし、`clampSidebarWidth` を通す
+- サイドバーと separator を同じ条件式に入れ、閉じているときは両方消える
+
+### 検証
+
+`npm test` **77件 GREEN**（既存71 + 新規6）。`tsc -b` 型エラーなし。
+
+release ビルドで起動し、ブラウザで実測:
+
+| 確認項目 | 結果 |
+|---|---|
+| ドラッグで幅が追従 | x=380 へドラッグ → 380px |
+| 最小クランプ | x=40 → 160px |
+| 最大クランプ | x=900 → 480px |
+| pointerup 後にリスナー解除 | 解放後に x=700 へ動かしても 320px のまま |
+| リロードで幅を復元 | `{"width":320,"open":true}` → 320px で復元 |
+| 折りたたみの永続化 | 閉じてリロード → 閉じたまま。再度開くと 320px に戻る |
+| 閉じたとき separator も消える | サイドバーの separator のみ消え、SplitPane の分割線3本は残る |
+| localStorage 削除時 | 既定 224px・開いた状態 |
+| xterm の追従 | サイドバー 320→460px で `.xterm-screen` が 105→84px。`ResizeObserver` が `fit()` を呼んでいる |
+
+### 注意点（ビルド時にはまった箇所）
+
+`build-frontend.ps1` を PowerShell から `2>&1` 付きで呼ぶと、ビルドが成功していても失敗する。
+PowerShell 5.1 は native コマンドの stderr を `NativeCommandError` に包むため、
+スクリプト側の `$ErrorActionPreference = 'Stop'` が発火して dist の反映前に中断する。
+今回は vite の chunk サイズ警告（バンドルが 500kB を超えた）が stderr に出たことで顕在化した。
+`2>&1` を付けずに呼べば正常に完了する。
+
+### スコープ外（今回は入れていない）
+
+| 項目 | 理由 |
+|---|---|
+| 矢印キーでのリサイズ | 既存の `SplitPane` にも無く、操作系を不揃いにしないため |
+| アイコンのみの細幅表示（VS Code 風） | 既存の折りたたみで代替できる |
+| `aria-valuenow` / `tabIndex` | 既存 `SplitPane` と同水準（`role="separator"` + `aria-orientation`）に揃えた |
+| 保存のデバウンス | layout 保存がより大きな JSON を同じ頻度で書いており、そこで問題が出ていない |
+
+---
+
+## Phase 28: サイドバー幅の下限撤廃と、名前のダブルクリック編集（2026-09-02）
+
+### 依頼
+
+1. サイドバーの幅を「ギリギリまで」調整できるようにする（最大は現状のまま、最小は消えるくらいまで）
+2. ターミナル名をダブルクリックで変更できるようにする。サイドバーとヘッダのどちらで変えても両方に反映されること
+
+### 実装
+
+**幅の下限を撤廃** — `features/sidebar/sidebar-state.ts`
+
+`SIDEBAR_WIDTH_MIN` を 160 → **0**。最大は 480 のまま。
+幅0でもドラッグ用の境界線（6px）はサイドバーの外側にあるため残り、そこから掴んで戻せる。
+
+**名前のダブルクリック編集** — `Sidebar.tsx`（新規）/ `TerminalPanel.tsx`（シングル→ダブルへ変更）
+
+サイドバーは `renameSession` を直接呼び、結果を `onRenamed` で Workspace に渡す（TerminalPanel と同じ形）。
+`handleRenamed` が `sessions` を更新し、サイドバーの行・ヘッダのタイトルはどちらもそこから派生するため、
+片方で変更するともう片方にも自動で反映される。
+
+### この作業で見つけた既存バグ3件（いずれも Phase 19 の React → Preact 移行時に混入）
+
+**① `onChange` がタイプ中に発火しない → リネームが常に無効だった**
+
+Preact の `onChange` は**ネイティブの `change` イベント**にマップされる（React は `input`）。
+タイプしても `draftTitle` が更新されず、Enter（keydown）が change より先に走るため、
+`commitRename` が編集前の値を読んで「変更なし」と判断していた。
+
+検証で得た決定的な差:
+
+| 操作 | 結果 |
+|---|---|
+| `input` イベント → Enter | 名前は**前回の change 時の値**のまま |
+| `change` イベント → Enter | 名前が**正しく変わる** |
+
+修正: `onChange` → **`onInput`**（TerminalPanel / Sidebar の text input）。
+`SettingsPanel` の `<select>` は `change` が正しい挙動なので変更しない。
+
+**② Escape でキャンセルしても保存されていた**
+
+Escape で `setEditing(false)` すると input が DOM から外れ、**`onBlur` が発火して `commitRename` が走る**。
+`setDraftTitle` は非同期なので間に合わず、編集中の値がそのまま保存されていた。
+
+修正: `cancelledRef` を追加し、Escape 時に立てて `onBlur` 側の保存をスキップする。
+編集開始時にフラグをリセットして持ち越さない。
+
+**③ 未選択の行・非アクティブなパネルでは、ダブルクリックが効かなかった**
+
+`TerminalPanel.tsx` の
+
+```tsx
+useEffect(() => {
+  if (active) termRef.current?.focus();
+}, [active]);
+```
+
+が原因。サイドバーの未選択行をダブルクリックすると、
+①クリックで選択され `active` が false→true ②編集欄が開いて autoFocus
+③この useEffect が端末へフォーカスを移す ④input が blur して編集が即終了、という順で潰れていた。
+既に選択済みの行では `active` が変わらないため発生せず、「2回目は成功する」という挙動になっていた。
+
+MutationObserver で捉えた時系列（9ms で開いて閉じている）:
+
+```
+17622 dblclick detail:2
+17624 BUTTON removed   ← 編集モードに入っている
+17625 DIV added        ← input 出現
+17633 DIV removed      ← 閉じられた
+17633 BUTTON added
+```
+
+修正:
+- 端末へのフォーカス移動を、入力欄にフォーカスがあるときは行わない
+  （`document.activeElement instanceof HTMLInputElement` で判定）
+- 編集開始時に `titleInputRef` で入力欄へ明示的にフォーカス（autoFocus だけでは xterm が保持したままになる）
+- 三項演算子の両分岐に `key` を付与。key がないと Preact が編集UIと通常UIの子要素を再利用し、
+  閉じるボタンの `svg` が名前ボタンの子として使われる壊れ方をしていた（ログに `removed: svg / added: SPAN×3`）
+
+### 検証
+
+`npm test` **77件 GREEN**。`tsc -b` 型エラーなし。release ビルドで実機確認:
+
+| 確認項目 | 結果 |
+|---|---|
+| 幅を0まで縮小 | 0px。横スクロールなし、レイアウト崩れなし |
+| 幅0から復帰 | 境界線が左端に6px残る（`x:0, width:6`）→ 掴んで300pxへ戻せる |
+| サイドバーで改名（**未選択の行・リロード直後**） | 1回のダブルクリックで開き、フォーカスも保持。`ビルド監視` に変更 |
+| ヘッダで改名（**非アクティブなパネル**） | 同様に成功。`テスト実行` に変更 |
+| 双方向の同期 | サイドバー・ヘッダ・サーバーの3箇所すべて一致 |
+| Escape | 編集前の名前が維持され、サーバーも未変更 |
+| 端末のフォーカス（既存機能） | 編集していないときは通常どおり端末へ移る |
+| Alt+数字での移動（RDD 9.6章） | 2番目がアクティブになり、端末へフォーカスが移る |
+
+### 補足
+
+依頼の「両方をダブルクリックに」を満たすため、ヘッダ側は**シングルクリック→ダブルクリック**に変更した。
+シングルクリックだと名前を押しただけで編集モードに入る誤爆があったため、その点も解消している。

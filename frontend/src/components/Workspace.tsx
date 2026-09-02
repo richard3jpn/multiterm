@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'preact/hooks';
+import type { JSX } from 'preact';
 import { Moon, PanelLeft, Sun, TerminalSquare } from './icons';
 import { Button } from './primitives/Button';
 import { NewTerminalButton } from './NewTerminalButton';
@@ -21,6 +22,12 @@ import { buildLayout } from '../features/layout/build-layout';
 import type { LayoutNode, SplitDirection, SplitPath } from '../features/layout/layout-tree';
 import { loadLayout, saveLayout } from '../features/layout/persistence';
 import { loadSettings } from '../features/settings/settings';
+import {
+  clampSidebarWidth,
+  loadSidebarState,
+  saveSidebarState,
+} from '../features/sidebar/sidebar-state';
+import type { SidebarState } from '../features/sidebar/sidebar-state';
 import { resolveShellLabel } from '../features/settings/shell-label';
 import { createSession, deleteSession, fetchSessions, fetchShells } from '../services/api';
 import type { Session, SessionStatus, ShellInfo } from '../types';
@@ -41,7 +48,7 @@ export function Workspace() {
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [loaded, setLoaded] = useState(false);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
-  const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [sidebar, setSidebar] = useState<SidebarState>(loadSidebarState);
   // 各ターミナルの最新状態。サイドバーで一覧表示するため親で集約する
   const [statuses, setStatuses] = useState<Readonly<Record<string, SessionStatus>>>({});
   // 完了したがユーザーがまだ見ていないターミナル（herdr の done 相当）
@@ -53,6 +60,8 @@ export function Workspace() {
   const previousStatusRef = useRef<Record<string, SessionStatus>>({});
   // 実行中になった時刻。一瞬の実行を完了に数えないための判定に使う
   const runningSinceRef = useRef<Record<string, number>>({});
+  // サイドバー幅のドラッグ計算に使う、サイドバー＋ターミナル領域の左端基準
+  const contentRef = useRef<HTMLDivElement>(null);
 
   // 初期化: バックエンドの生存セッションをSSOTとしてレイアウトを復元（RDD 7章）
   // シェル一覧の取得失敗はセッション復元に影響させない（独立して失敗許容）
@@ -102,6 +111,10 @@ export function Workspace() {
   useEffect(() => {
     if (loaded) saveLayout(layout);
   }, [layout, loaded]);
+
+  useEffect(() => {
+    saveSidebarState(sidebar);
+  }, [sidebar]);
 
   // Alt+1〜9 で視覚順のN番目ターミナルへフォーカス移動（RDD 9.6章）。
   // キャプチャ段階で処理し、xtermがAlt+数字をシェルへ送るのを抑止する。
@@ -237,6 +250,28 @@ export function Workspace() {
     setLayout((current) => (current === null ? null : updateRatio(current, path, ratio)));
   }, []);
 
+  // サイドバー右端のドラッグで幅を変更する（SplitPane の境界線と同じ方式）
+  const handleSidebarPointerDown = useCallback(
+    (event: JSX.TargetedPointerEvent<HTMLDivElement>) => {
+      const container = contentRef.current;
+      if (!container) return;
+      event.preventDefault();
+      const rect = container.getBoundingClientRect();
+
+      const handleMove = (moveEvent: PointerEvent) => {
+        const width = clampSidebarWidth(moveEvent.clientX - rect.left);
+        setSidebar((current) => ({ ...current, width }));
+      };
+      const handleUp = () => {
+        window.removeEventListener('pointermove', handleMove);
+        window.removeEventListener('pointerup', handleUp);
+      };
+      window.addEventListener('pointermove', handleMove);
+      window.addEventListener('pointerup', handleUp);
+    },
+    [],
+  );
+
   const orderedIds = layout === null ? [] : collectSessionIds(layout);
 
   // サイドバーの行。レイアウト上の並び（Alt+数字の順）と一致させる
@@ -297,10 +332,10 @@ export function Workspace() {
         <Button
           variant="ghost"
           size="icon-sm"
-          title={sidebarOpen ? 'サイドバーを閉じる' : 'サイドバーを開く'}
-          aria-label={sidebarOpen ? 'サイドバーを閉じる' : 'サイドバーを開く'}
-          aria-expanded={sidebarOpen}
-          onClick={() => setSidebarOpen((open) => !open)}
+          title={sidebar.open ? 'サイドバーを閉じる' : 'サイドバーを開く'}
+          aria-label={sidebar.open ? 'サイドバーを閉じる' : 'サイドバーを開く'}
+          aria-expanded={sidebar.open}
+          onClick={() => setSidebar((current) => ({ ...current, open: !current.open }))}
         >
           <PanelLeft />
         </Button>
@@ -348,14 +383,25 @@ export function Workspace() {
         </div>
       )}
 
-      <div className="flex min-h-0 flex-1">
-        {sidebarOpen && (
-          <Sidebar
-            items={sidebarItems}
-            activeSessionId={activeSessionId}
-            onSelect={setActiveSessionId}
-            onClose={handleClose}
-          />
+      <div ref={contentRef} className="flex min-h-0 flex-1">
+        {sidebar.open && (
+          <>
+            <Sidebar
+              items={sidebarItems}
+              activeSessionId={activeSessionId}
+              width={sidebar.width}
+              onSelect={setActiveSessionId}
+              onClose={handleClose}
+              onRenamed={handleRenamed}
+            />
+            <div
+              role="separator"
+              aria-orientation="vertical"
+              onPointerDown={handleSidebarPointerDown}
+              title="ドラッグでサイドバーの幅を変更"
+              className="w-1.5 shrink-0 cursor-col-resize bg-border transition-colors hover:bg-primary/60"
+            />
+          </>
         )}
 
         <main className="min-h-0 min-w-0 flex-1 p-2">
