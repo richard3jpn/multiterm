@@ -1137,3 +1137,73 @@ MutationObserver で捉えた時系列（9ms で開いて閉じている）:
 
 依頼の「両方をダブルクリックに」を満たすため、ヘッダ側は**シングルクリック→ダブルクリック**に変更した。
 シングルクリックだと名前を押しただけで編集モードに入る誤爆があったため、その点も解消している。
+
+---
+
+## Phase 29: Ctrl+V でペーストできない問題の修正（2026-09-02）
+
+### 症状
+
+MultiTerm 上で Claude Code の TUI を使っているとき、Ctrl+V でペーストできない。
+
+### 原因
+
+xterm.js は Ctrl+V を制御文字 `\x16`（SYN）として PTY へ送り、その際 `preventDefault()` するため、
+ブラウザのネイティブ paste イベントが発火しない。Claude Code の TUI は `\x16` を無視するため何も起きない。
+
+PowerShell では動いていた。PSReadLine が `\x16` を「Paste」にバインドしており、
+**サーバー側（ローカルなので同一PC）の Windows クリップボード**から貼り付けるため。
+Claude Code は PSReadLine を使わないので、この経路が使えない。
+
+xterm.js の paste 処理自体は生きていることを確認した。paste イベントを直接投げると
+ブラケットペースト形式で正しく送られ、Claude Code の入力欄にも入る。
+
+```
+送信内容: \x1b[200~MANUAL_PASTE_EVENT\x1b[201~
+→ Claude Code の入力欄に MANUAL_PASTE_EVENT が表示される
+```
+
+### 修正
+
+`TerminalPanel.tsx` — Ctrl+V だけ xterm に処理させず、ブラウザのペーストに任せる。
+
+```ts
+term.attachCustomKeyEventHandler((event) => {
+  if (
+    event.type === 'keydown' && event.ctrlKey &&
+    !event.altKey && !event.metaKey && !event.shiftKey &&
+    event.key === 'v'
+  ) {
+    return false;
+  }
+  return true;
+});
+```
+
+`attachCustomKeyEventHandler` が false を返すと xterm はそのキーを処理せず `preventDefault` も呼ばないため、
+ネイティブの paste イベントが発火し、xterm の paste ハンドラがブラケットペーストで送信する。
+Windows Terminal と同じ挙動になる。
+
+### 検証
+
+`npm test` 77件 GREEN。`tsc -b` 型エラーなし。release ビルドで WebSocket の送信内容を実測:
+
+| 状況 | PTYへ送られた内容 |
+|---|---|
+| 修正前 Ctrl+V | `\x16` のみ（クリップボードの内容は送られない） |
+| 修正後 Ctrl+V（素のPowerShell） | `CTRL_V_PASTE_OK`（クリップボードの内容そのまま） |
+| 修正後 Ctrl+V（Claude Code 起動中） | `\x1b[200~PASTED_INTO_CLAUDE_CODE_TUI\x1b[201~` |
+
+Claude Code は DEC 2004（ブラケットペーストモード）を有効にするため、マーカー付きで送られる。
+ユーザーの環境でも Ctrl+V でペーストできることを確認した。
+
+### 副作用
+
+Ctrl+V を制御文字として送りたいアプリ（Emacs の quoted-insert 等）では使えなくなる。
+Windows Terminal も Ctrl+V をペーストに割り当てているため、標準的な挙動に揃える判断とした。
+Ctrl+C は中断シグナルとして必要なため変更していない。
+
+### 実装中のミス
+
+コメントに `\x16` と書こうとして、生の制御文字（0x16）をソースへ書き込んでしまった。
+`grep -P '\x16'` で検知し、文字列表記に置き換えて除去した。

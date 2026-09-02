@@ -123,6 +123,24 @@ export function TerminalPanel({
     }
     fit.fit();
 
+    // Ctrl+V はブラウザのペースト（xtermのpasteハンドラ→ブラケットペースト）に任せる。
+    // xtermに処理させると Ctrl+Vの制御文字 が送られるだけで、Claude Code等のTUIはこれを無視する。
+    // falseを返すとxtermはこのキーを扱わずpreventDefaultもしないため、
+    // ネイティブのpasteイベントが発火する（Windows Terminal と同じ挙動）。
+    term.attachCustomKeyEventHandler((event) => {
+      if (
+        event.type === 'keydown' &&
+        event.ctrlKey &&
+        !event.altKey &&
+        !event.metaKey &&
+        !event.shiftKey &&
+        event.key === 'v'
+      ) {
+        return false;
+      }
+      return true;
+    });
+
     const ws = new WebSocket(buildWsUrl(session.id));
     // PTY出力は生バイトで受け取り、xtermへ直接書き込む（JSONパースを挟まない）
     ws.binaryType = 'arraybuffer';
