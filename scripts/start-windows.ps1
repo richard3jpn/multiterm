@@ -16,7 +16,7 @@ $Backend = Join-Path $Root 'backend'
 $Frontend = Join-Path $Root 'frontend'
 
 $BackendPort = 3001
-$FrontendPort = 5173
+$FrontendPort = 5174
 
 # Security (RDD 5.12 / 8): loopback-only bind + Origin whitelist.
 # Use 127.0.0.1 (not "localhost") everywhere to avoid IPv4/IPv6 resolution mismatch.
