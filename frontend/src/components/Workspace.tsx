@@ -348,10 +348,10 @@ export function Workspace() {
           <span
             className={`inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[11px] font-medium ${
               overallState === 'blocked'
-                ? 'bg-yellow-400/15 text-yellow-500'
+                ? 'bg-red-500/15 text-red-400'
                 : overallState === 'working'
-                  ? 'bg-blue-500/15 text-blue-400'
-                  : 'bg-cyan-400/15 text-cyan-400'
+                  ? 'bg-amber-400/15 text-amber-400'
+                  : 'bg-blue-500/15 text-blue-400'
             }`}
             title="すべてのターミナルのうち、最も注意が必要な状態"
           >

@@ -46,17 +46,20 @@ export const countPaneStates = (states: readonly PaneState[]): PaneStateCounts =
   return counts;
 };
 
-/** サイドバー行の状態ドット。既存の状態色（RDD 5章6項）を維持し、done だけ新色 */
+/**
+ * サイドバー行の状態ドット（RDD 5章6項）。赤・黄・青の3系統。
+ * done は待機と同じ青にしている（色では区別せず、上部の集約カウントで数だけ示す）。
+ */
 export const paneDotClasses = (state: PaneState): string => {
   switch (state) {
     case 'blocked':
-      return 'bg-yellow-400 animate-pulse';
+      return 'bg-red-500 animate-pulse';
     case 'working':
-      return 'bg-blue-500';
+      return 'bg-amber-400';
     case 'done':
-      return 'bg-cyan-400';
+      return 'bg-blue-500';
     case 'idle':
-      return 'bg-green-500';
+      return 'bg-blue-500';
   }
 };
 

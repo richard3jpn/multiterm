@@ -62,11 +62,12 @@ describe('状態の集計', () => {
 
 describe('表示', () => {
   it('既存の状態色を維持し、done だけ新色（RDD 5章6項と矛盾させない）', () => {
-    expect(paneDotClasses('blocked')).toContain('bg-yellow-400');
+    expect(paneDotClasses('blocked')).toContain('bg-red-500');
     expect(paneDotClasses('blocked')).toContain('animate-pulse');
-    expect(paneDotClasses('working')).toBe('bg-blue-500');
-    expect(paneDotClasses('idle')).toBe('bg-green-500');
-    expect(paneDotClasses('done')).toBe('bg-cyan-400');
+    expect(paneDotClasses('working')).toBe('bg-amber-400');
+    expect(paneDotClasses('idle')).toBe('bg-blue-500');
+    // done は待機と同じ青（色では区別せず、上部の集約カウントで数だけ示す）
+    expect(paneDotClasses('done')).toBe('bg-blue-500');
   });
 
   it('日本語ラベル', () => {

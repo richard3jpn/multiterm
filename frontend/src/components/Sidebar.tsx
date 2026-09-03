@@ -105,10 +105,10 @@ export function Sidebar({
         </div>
         <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px]">
           {counts.blocked > 0 && (
-            <span className="font-semibold text-yellow-500">入力待ち {counts.blocked}</span>
+            <span className="font-semibold text-red-400">入力待ち {counts.blocked}</span>
           )}
-          {counts.working > 0 && <span className="text-blue-400">実行中 {counts.working}</span>}
-          {counts.done > 0 && <span className="text-cyan-400">完了 {counts.done}</span>}
+          {counts.working > 0 && <span className="text-amber-400">実行中 {counts.working}</span>}
+          {counts.done > 0 && <span className="text-blue-400">完了 {counts.done}</span>}
           {counts.blocked === 0 && counts.working === 0 && counts.done === 0 && (
             <span className="text-muted-foreground">すべて待機</span>
           )}
@@ -185,7 +185,7 @@ export function Sidebar({
                         <span className="min-w-0 flex-1">
                           <span className="block truncate text-xs font-medium">{item.title}</span>
                           <span className="block truncate text-[10px] text-muted-foreground">
-                            {item.shellLabel} · {paneStateLabel(item.state)}
+                            {paneStateLabel(item.state)} · {item.shellLabel}
                           </span>
                         </span>
                       </button>

@@ -10,7 +10,12 @@ import { useSettings } from '../contexts/settings-context';
 import { useTheme } from '../contexts/theme-context';
 import { resolveFontFamily } from '../features/settings/settings';
 import { sanitizeTitle } from '../features/session/title';
-import { statusDotClasses, statusFrameClasses, statusLabel } from '../features/status/status-style';
+import {
+  statusDotClasses,
+  statusFrameClasses,
+  statusHeaderClasses,
+  statusLabel,
+} from '../features/status/status-style';
 import { renameSession } from '../services/api';
 import { buildWsUrl, inputMessage, parseServerMessage, resizeMessage } from '../services/ws';
 import type { Session, SessionStatus, ShellInfo } from '../types';
@@ -273,7 +278,11 @@ export function TerminalPanel({
         connected ? statusFrameClasses(status) : 'border-gray-500 shadow-none'
       } ${active ? 'ring-2 ring-primary ring-offset-1 ring-offset-background' : ''}`}
     >
-      <div className="flex shrink-0 items-center gap-2 border-b bg-muted/50 px-2 py-1">
+      <div
+        className={`flex shrink-0 items-center gap-2 border-b px-2 py-1 transition-colors ${
+          connected ? statusHeaderClasses(status) : 'bg-muted/50'
+        }`}
+      >
         {index !== null && (
           <span
             className={`inline-flex size-4 shrink-0 items-center justify-center rounded text-[10px] font-semibold tabular-nums ${
