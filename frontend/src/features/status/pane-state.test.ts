@@ -3,6 +3,7 @@ import {
   aggregatePaneState,
   countPaneStates,
   paneDotClasses,
+  paneFrameClasses,
   paneStateLabel,
   resolvePaneState,
   MIN_RUNNING_MS,
@@ -61,13 +62,23 @@ describe('状態の集計', () => {
 });
 
 describe('表示', () => {
-  it('既存の状態色を維持し、done だけ新色（RDD 5章6項と矛盾させない）', () => {
+  it('状態色は status-style と揃える（実行中=青、待機=黄）', () => {
     expect(paneDotClasses('blocked')).toContain('bg-red-500');
     expect(paneDotClasses('blocked')).toContain('animate-pulse');
-    expect(paneDotClasses('working')).toBe('bg-amber-400');
-    expect(paneDotClasses('idle')).toBe('bg-blue-500');
-    // done は待機と同じ青（色では区別せず、上部の集約カウントで数だけ示す）
-    expect(paneDotClasses('done')).toBe('bg-blue-500');
+    expect(paneDotClasses('working')).toBe('bg-blue-500');
+    expect(paneDotClasses('idle')).toBe('bg-amber-400');
+    // done は待機と同じ黄（色では区別せず、上部の集約カウントで数だけ示す）
+    expect(paneDotClasses('done')).toBe('bg-amber-400');
+  });
+
+  it('画面全体の外枠は手を動かす必要がある状態だけ縁取る', () => {
+    expect(paneFrameClasses('blocked')).toContain('inset');
+    expect(paneFrameClasses('blocked')).toContain('239,68,68');
+    // 待機・完了は黄で縁取る（作業が終わって手が空いたことに気づけるように）
+    expect(paneFrameClasses('idle')).toContain('251,191,36');
+    expect(paneFrameClasses('done')).toContain('251,191,36');
+    // 実行中は放っておいてよいので枠なし
+    expect(paneFrameClasses('working')).toBe('');
   });
 
   it('日本語ラベル', () => {

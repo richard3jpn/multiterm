@@ -55,11 +55,31 @@ export const paneDotClasses = (state: PaneState): string => {
     case 'blocked':
       return 'bg-red-500 animate-pulse';
     case 'working':
-      return 'bg-amber-400';
+      return 'bg-blue-500';
     case 'done':
-      return 'bg-blue-500';
+      return 'bg-amber-400';
     case 'idle':
-      return 'bg-blue-500';
+      return 'bg-amber-400';
+  }
+};
+
+/**
+ * 画面全体の外枠（集約状態）。ペインの枠・サイドバーのドットと同じ状態色を、
+ * 窓の縁でも示す。内側に描くため枠の有無でレイアウトがずれない。
+ *
+ * エージェントを見張る使い方では、実行中は放っておけて、入力待ち（承認を求めている）と
+ * 待機（作業が終わって手が空いた）こそ気づきたい。そのため縁取りを出すのはこの2つで、
+ * 実行中は枠なしにしている。done は待機と同じ黄（色では区別せず、集約カウントで数だけ示す）。
+ */
+export const paneFrameClasses = (state: PaneState): string => {
+  switch (state) {
+    case 'blocked':
+      return 'shadow-[inset_0_0_0_3px_rgba(239,68,68,1),inset_0_0_24px_rgba(239,68,68,0.45)]';
+    case 'done':
+    case 'idle':
+      return 'shadow-[inset_0_0_0_3px_rgba(251,191,36,1)]';
+    case 'working':
+      return '';
   }
 };
 

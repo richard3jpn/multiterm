@@ -11,6 +11,7 @@ import { TerminalPanel } from './TerminalPanel';
 import {
   aggregatePaneState,
   paneDotClasses,
+  paneFrameClasses,
   paneStateLabel,
   resolvePaneState,
   shouldMarkDone,
@@ -327,7 +328,9 @@ export function Workspace() {
   );
 
   return (
-    <div className="flex h-dvh flex-col bg-background text-foreground">
+    <div
+      className={`flex h-dvh flex-col bg-background text-foreground ${paneFrameClasses(overallState)}`}
+    >
       <header className="flex shrink-0 items-center gap-3 border-b px-4 py-2">
         <Button
           variant="ghost"
@@ -350,8 +353,8 @@ export function Workspace() {
               overallState === 'blocked'
                 ? 'bg-red-500/15 text-red-400'
                 : overallState === 'working'
-                  ? 'bg-amber-400/15 text-amber-400'
-                  : 'bg-blue-500/15 text-blue-400'
+                  ? 'bg-blue-500/15 text-blue-400'
+                  : 'bg-amber-400/15 text-amber-400'
             }`}
             title="すべてのターミナルのうち、最も注意が必要な状態"
           >

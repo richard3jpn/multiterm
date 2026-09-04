@@ -7,9 +7,9 @@ import {
 } from './status-style';
 
 describe('状態別スタイル（RDD 2章・5章6項）', () => {
-  it('running: 黄の境界線（パルスアニメーションなし）', () => {
+  it('running: 落ち着いた青の境界線（パルスアニメーションなし）', () => {
     const classes = statusFrameClasses('running');
-    expect(classes).toContain('border-amber-400');
+    expect(classes).toContain('border-blue-500');
     expect(classes).not.toContain('animate-pulse');
   });
 
@@ -19,9 +19,9 @@ describe('状態別スタイル（RDD 2章・5章6項）', () => {
     expect(classes).toContain('shadow');
   });
 
-  it('idle: 落ち着いた青境界線（パルスなし）', () => {
+  it('idle: 目につく黄の境界線（作業終了に気づけること。パルスなし）', () => {
     const classes = statusFrameClasses('idle');
-    expect(classes).toContain('border-blue-500');
+    expect(classes).toContain('border-amber-400');
     expect(classes).not.toContain('animate-pulse');
   });
 
@@ -32,22 +32,22 @@ describe('状態別スタイル（RDD 2章・5章6項）', () => {
   });
 
   it('状態ドット: running/idleは静的、waiting-inputのみ点滅', () => {
-    expect(statusDotClasses('running')).toBe('bg-amber-400');
+    expect(statusDotClasses('running')).toBe('bg-blue-500');
     expect(statusDotClasses('waiting-input')).toContain('bg-red-500');
     expect(statusDotClasses('waiting-input')).toContain('animate-pulse');
-    expect(statusDotClasses('idle')).toBe('bg-blue-500');
+    expect(statusDotClasses('idle')).toBe('bg-amber-400');
   });
 
   it('ヘッダー帯は枠と同じ状態色を敷く', () => {
-    expect(statusHeaderClasses('running')).toContain('amber');
+    expect(statusHeaderClasses('running')).toContain('blue');
     expect(statusHeaderClasses('waiting-input')).toContain('red');
-    expect(statusHeaderClasses('idle')).toContain('blue');
+    expect(statusHeaderClasses('idle')).toContain('amber');
   });
 
   it('実行中と待機は別の色相（見分けられること）', () => {
     expect(statusDotClasses('running')).not.toBe(statusDotClasses('idle'));
-    expect(statusFrameClasses('running')).not.toContain('blue');
-    expect(statusFrameClasses('idle')).not.toContain('amber');
+    expect(statusFrameClasses('running')).not.toContain('amber');
+    expect(statusFrameClasses('idle')).not.toContain('blue');
   });
 
   it('赤・黄・青の3系統で組む（緑・紫・シアンは使わない）', () => {

@@ -107,8 +107,8 @@ export function Sidebar({
           {counts.blocked > 0 && (
             <span className="font-semibold text-red-400">入力待ち {counts.blocked}</span>
           )}
-          {counts.working > 0 && <span className="text-amber-400">実行中 {counts.working}</span>}
-          {counts.done > 0 && <span className="text-blue-400">完了 {counts.done}</span>}
+          {counts.working > 0 && <span className="text-blue-400">実行中 {counts.working}</span>}
+          {counts.done > 0 && <span className="text-amber-400">完了 {counts.done}</span>}
           {counts.blocked === 0 && counts.working === 0 && counts.done === 0 && (
             <span className="text-muted-foreground">すべて待機</span>
           )}
