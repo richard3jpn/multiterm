@@ -89,3 +89,26 @@ export const collectSessionIds = (node: LayoutNode): string[] =>
   node.type === 'leaf'
     ? [node.sessionId]
     : [...collectSessionIds(node.first), ...collectSessionIds(node.second)];
+
+/**
+ * localStorageから読んだ外部データがレイアウトツリーの形をしているか検証する。
+ * 型の定義元に型ガードを置き、レイアウト単体・ウィンドウ配列の双方の永続化から使う。
+ */
+export const isLayoutNode = (value: unknown): value is LayoutNode => {
+  if (typeof value !== 'object' || value === null) return false;
+  const node = value as Record<string, unknown>;
+  if (node.type === 'leaf') {
+    return typeof node.sessionId === 'string' && node.sessionId !== '';
+  }
+  if (node.type === 'split') {
+    return (
+      (node.direction === 'horizontal' || node.direction === 'vertical') &&
+      typeof node.ratio === 'number' &&
+      node.ratio > 0 &&
+      node.ratio < 1 &&
+      isLayoutNode(node.first) &&
+      isLayoutNode(node.second)
+    );
+  }
+  return false;
+};

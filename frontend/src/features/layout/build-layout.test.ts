@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildLayout } from './build-layout';
+import { appendSessionsRight, buildLayout } from './build-layout';
 import { collectSessionIds, splitLeaf } from './layout-tree';
 import type { LayoutNode } from './layout-tree';
 import type { Session } from '../../types';
@@ -40,5 +40,27 @@ describe('buildLayout（RDD 7章: バックエンドSSOTでの再構成）', () 
     const stored = splitLeaf(leaf('dead1'), 'dead1', 'horizontal', 'dead2');
     const result = buildLayout(stored, [session('x')]);
     expect(result).toEqual(leaf('x'));
+  });
+});
+
+describe('appendSessionsRight（ウィンドウ機能と共有する追加処理）', () => {
+  it('空レイアウトへ足すと最初の葉になる', () => {
+    expect(appendSessionsRight(null, [session('a')])).toEqual(leaf('a'));
+  });
+
+  it('既存レイアウトの右側へ縦分割で足す', () => {
+    const result = appendSessionsRight(leaf('a'), [session('b')]);
+    expect(result).toEqual({
+      type: 'split',
+      direction: 'vertical',
+      ratio: 0.5,
+      first: leaf('a'),
+      second: leaf('b'),
+    });
+  });
+
+  it('足すセッションが無ければ元のレイアウトをそのまま返す', () => {
+    const stored = leaf('a');
+    expect(appendSessionsRight(stored, [])).toBe(stored);
   });
 });
