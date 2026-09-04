@@ -5,9 +5,8 @@ import { Button } from './primitives/Button';
 import { NewTerminalButton } from './NewTerminalButton';
 import { SettingsPanel } from './SettingsPanel';
 import { Sidebar } from './Sidebar';
-import type { SidebarItem } from './Sidebar';
-import { SplitPane } from './SplitPane';
-import { TerminalPanel } from './TerminalPanel';
+import type { SidebarGroup, SidebarItem } from './Sidebar';
+import { WindowView } from './WindowView';
 import {
   aggregatePaneState,
   paneDotClasses,
@@ -18,10 +17,11 @@ import {
 } from '../features/status/pane-state';
 import { useSettings } from '../contexts/settings-context';
 import { useTheme } from '../contexts/theme-context';
-import { collectSessionIds, removeLeaf, splitLeaf, updateRatio } from '../features/layout/layout-tree';
-import { buildLayout } from '../features/layout/build-layout';
-import type { LayoutNode, SplitDirection, SplitPath } from '../features/layout/layout-tree';
-import { loadLayout, saveLayout } from '../features/layout/persistence';
+import { collectSessionIds, splitLeaf, updateRatio } from '../features/layout/layout-tree';
+import type { SplitDirection, SplitPath } from '../features/layout/layout-tree';
+import { useWorkspaceWindows } from '../hooks/use-workspace-windows';
+import { summarizeWindowClose, windowCloseMessage } from '../features/window/close-window';
+import { resolveDigitShortcut } from '../features/window/window-keys';
 import { loadSettings } from '../features/settings/settings';
 import {
   clampSidebarWidth,
@@ -44,12 +44,26 @@ export function Workspace() {
   const { theme, toggleTheme } = useTheme();
   const { settings, setDefaultShellId } = useSettings();
   const [sessions, setSessions] = useState<readonly Session[]>([]);
-  const [layout, setLayout] = useState<LayoutNode | null>(null);
   const [shells, setShells] = useState<readonly ShellInfo[]>([]);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [loaded, setLoaded] = useState(false);
-  const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [sidebar, setSidebar] = useState<SidebarState>(loadSidebarState);
+  // ウィンドウ構成と、その中のレイアウト・フォーカス（RDD 14章）
+  const {
+    windows,
+    activeWindowId,
+    activeLayout: layout,
+    activeSessionId,
+    initialize: initializeWindows,
+    updateActiveLayout,
+    addSession,
+    removeSession,
+    focusSession,
+    openWindow,
+    closeWindow,
+    switchWindow,
+    renameWindowTitle,
+  } = useWorkspaceWindows();
   // 各ターミナルの最新状態。サイドバーで一覧表示するため親で集約する
   const [statuses, setStatuses] = useState<Readonly<Record<string, SessionStatus>>>({});
   // 完了したがユーザーがまだ見ていないターミナル（herdr の done 相当）
@@ -73,7 +87,7 @@ export function Workspace() {
         const alive = await fetchSessions();
         if (cancelled) return;
         setSessions(alive);
-        setLayout(buildLayout(loadLayout(), alive));
+        initializeWindows(alive);
       } catch (error: unknown) {
         if (!cancelled) setErrorMessage(toErrorMessage(error));
       } finally {
@@ -107,34 +121,37 @@ export function Workspace() {
     return () => {
       cancelled = true;
     };
-  }, [setDefaultShellId]);
-
-  useEffect(() => {
-    if (loaded) saveLayout(layout);
-  }, [layout, loaded]);
+  }, [setDefaultShellId, initializeWindows]);
 
   useEffect(() => {
     saveSidebarState(sidebar);
   }, [sidebar]);
 
-  // Alt+1〜9 で視覚順のN番目ターミナルへフォーカス移動（RDD 9.6章）。
-  // キャプチャ段階で処理し、xtermがAlt+数字をシェルへ送るのを抑止する。
+  // Alt+1〜9 でアクティブウィンドウ内のN番目ペインへ、Alt+Shift+1〜9 でN番目の
+  // ウィンドウへ移動する（RDD 9.6章・14章）。
+  // キャプチャ段階で処理し、xtermがこれらのキーをシェルへ送るのを抑止する。
   useEffect(() => {
     const handler = (event: KeyboardEvent) => {
-      if (!event.altKey || event.ctrlKey || event.metaKey) return;
-      if (!event.code.startsWith('Digit')) return;
-      const n = Number(event.code.slice(5));
-      if (!Number.isInteger(n) || n < 1 || n > 9) return;
+      const shortcut = resolveDigitShortcut(event);
+      if (shortcut === null) return;
+      if (shortcut.kind === 'window') {
+        const target = windows[shortcut.index - 1];
+        if (target === undefined) return;
+        event.preventDefault();
+        event.stopPropagation();
+        switchWindow(target.id);
+        return;
+      }
       if (layout === null) return;
-      const target = collectSessionIds(layout)[n - 1];
+      const target = collectSessionIds(layout)[shortcut.index - 1];
       if (target === undefined) return;
       event.preventDefault();
       event.stopPropagation();
-      setActiveSessionId(target);
+      focusSession(target);
     };
     window.addEventListener('keydown', handler, true);
     return () => window.removeEventListener('keydown', handler, true);
-  }, [layout]);
+  }, [layout, windows, focusSession, switchWindow]);
 
   // shellId 未指定は既定シェル、指定時はそのシェルで作成し既定も更新（RDD 9.5章）
   const handleCreate = useCallback(
@@ -145,8 +162,7 @@ export function Workspace() {
         setErrorMessage(null);
         const session = await createSession(chosen);
         setSessions((current) => [...current, session]);
-        setActiveSessionId(session.id);
-        setLayout((current) =>
+        addSession(session.id, (current) =>
           current === null
             ? { type: 'leaf', sessionId: session.id }
             : {
@@ -161,7 +177,7 @@ export function Workspace() {
         setErrorMessage(toErrorMessage(error));
       }
     },
-    [settings.defaultShellId, setDefaultShellId],
+    [settings.defaultShellId, setDefaultShellId, addSession],
   );
 
   // shellId 未指定は既定シェル、指定時はそのシェルで分割し既定も更新（RDD 9.7章）
@@ -173,8 +189,7 @@ export function Workspace() {
         setErrorMessage(null);
         const session = await createSession(chosen);
         setSessions((current) => [...current, session]);
-        setActiveSessionId(session.id);
-        setLayout((current) =>
+        addSession(session.id, (current) =>
           current === null
             ? { type: 'leaf', sessionId: session.id }
             : splitLeaf(current, targetId, direction, session.id),
@@ -183,7 +198,7 @@ export function Workspace() {
         setErrorMessage(toErrorMessage(error));
       }
     },
-    [settings.defaultShellId, setDefaultShellId],
+    [settings.defaultShellId, setDefaultShellId, addSession],
   );
 
   const handleRenamed = useCallback((updated: Session) => {
@@ -229,11 +244,13 @@ export function Workspace() {
     );
   }, [activeSessionId]);
 
-  const removeFromView = useCallback((sessionId: string) => {
-    setSessions((current) => current.filter((s) => s.id !== sessionId));
-    setLayout((current) => (current === null ? null : removeLeaf(current, sessionId)));
-    setActiveSessionId((current) => (current === sessionId ? null : current));
-  }, []);
+  const removeFromView = useCallback(
+    (sessionId: string) => {
+      setSessions((current) => current.filter((s) => s.id !== sessionId));
+      removeSession(sessionId);
+    },
+    [removeSession],
+  );
 
   const handleClose = useCallback(
     async (sessionId: string) => {
@@ -247,9 +264,34 @@ export function Workspace() {
     [removeFromView],
   );
 
-  const handleRatioChange = useCallback((path: SplitPath, ratio: number) => {
-    setLayout((current) => (current === null ? null : updateRatio(current, path, ratio)));
-  }, []);
+  /**
+   * ウィンドウを閉じると中のターミナルも終了する（RDD 14章）。
+   * 実行中・入力待ちを巻き込むときだけ確認を挟む（全部待機なら黙って閉じてよい）。
+   */
+  const handleCloseWindow = useCallback(
+    async (windowId: string) => {
+      const target = windows.find((termWindow) => termWindow.id === windowId);
+      if (target === undefined) return;
+      const summary = summarizeWindowClose(target.layout, (id) => statuses[id]);
+      if (summary.needsConfirm && !window.confirm(windowCloseMessage(target.title, summary))) {
+        return;
+      }
+      closeWindow(windowId);
+      setSessions((current) => current.filter((s) => !summary.sessionIds.includes(s.id)));
+      // 1つ失敗しても残りは閉じにいく
+      const results = await Promise.allSettled(summary.sessionIds.map(deleteSession));
+      const failed = results.filter((result) => result.status === 'rejected').length;
+      if (failed > 0) setErrorMessage(`${failed} 個のターミナルを終了できませんでした`);
+    },
+    [windows, statuses, closeWindow],
+  );
+
+  const handleRatioChange = useCallback(
+    (path: SplitPath, ratio: number) => {
+      updateActiveLayout((current) => (current === null ? null : updateRatio(current, path, ratio)));
+    },
+    [updateActiveLayout],
+  );
 
   // サイドバー右端のドラッグで幅を変更する（SplitPane の境界線と同じ方式）
   const handleSidebarPointerDown = useCallback(
@@ -273,58 +315,42 @@ export function Workspace() {
     [],
   );
 
-  const orderedIds = layout === null ? [] : collectSessionIds(layout);
-
-  // サイドバーの行。レイアウト上の並び（Alt+数字の順）と一致させる
-  const sidebarItems: SidebarItem[] = orderedIds.flatMap((sessionId, order) => {
-    const session = sessions.find((s) => s.id === sessionId);
-    if (!session) return [];
-    const status = statuses[sessionId] ?? session.status;
-    return [
-      {
-        sessionId,
-        title: session.title,
-        shellLabel: resolveShellLabel(session.shell, shells),
-        state: resolvePaneState(status, unseenDone.includes(sessionId)),
-        index: order < 9 ? order + 1 : null,
-      },
-    ];
-  });
-  // ヘッダーのバッジ。1つでも注意が必要なら全体をその状態として見せる
-  const overallState = aggregatePaneState(sidebarItems.map((item) => item.state));
-
-  const renderLeaf = useCallback(
-    (sessionId: string) => {
+  /**
+   * サイドバーの行をウィンドウごとにまとめる（RDD 14章）。
+   *
+   * Alt+数字の序数は「いま見ているウィンドウのN番目」なので、番号を振るのは
+   * アクティブウィンドウの行だけ。他ウィンドウの行に番号を出すと嘘になる。
+   */
+  const sidebarGroups: SidebarGroup[] = windows.map((termWindow, windowOrder) => {
+    const ids = termWindow.layout === null ? [] : collectSessionIds(termWindow.layout);
+    const isActiveWindow = termWindow.id === activeWindowId;
+    const items: SidebarItem[] = ids.flatMap((sessionId, order) => {
       const session = sessions.find((s) => s.id === sessionId);
-      if (!session) return null;
-      const order = orderedIds.indexOf(sessionId);
-      return (
-        <TerminalPanel
-          session={session}
-          shellLabel={resolveShellLabel(session.shell, shells)}
-          shells={shells}
-          index={order >= 0 && order < 9 ? order + 1 : null}
-          active={sessionId === activeSessionId}
-          onActivate={setActiveSessionId}
-          onClose={handleClose}
-          onSplit={handleSplit}
-          onExited={removeFromView}
-          onRenamed={handleRenamed}
-          onStatusChange={handleStatusChange}
-        />
-      );
-    },
-    [
-      sessions,
-      shells,
-      orderedIds,
-      activeSessionId,
-      handleClose,
-      handleSplit,
-      removeFromView,
-      handleRenamed,
-      handleStatusChange,
-    ],
+      if (!session) return [];
+      const status = statuses[sessionId] ?? session.status;
+      return [
+        {
+          sessionId,
+          title: session.title,
+          shellLabel: resolveShellLabel(session.shell, shells),
+          state: resolvePaneState(status, unseenDone.includes(sessionId)),
+          index: isActiveWindow && order < 9 ? order + 1 : null,
+        },
+      ];
+    });
+    return {
+      windowId: termWindow.id,
+      title: termWindow.title,
+      active: isActiveWindow,
+      state: aggregatePaneState(items.map((item) => item.state)),
+      index: windowOrder < 9 ? windowOrder + 1 : null,
+      canClose: windows.length > 1,
+      items,
+    };
+  });
+  // ヘッダーのバッジと画面の外枠。全ウィンドウを横断し、1つでも注意が必要ならその状態にする
+  const overallState = aggregatePaneState(
+    sidebarGroups.flatMap((group) => group.items.map((item) => item.state)),
   );
 
   return (
@@ -390,12 +416,16 @@ export function Workspace() {
         {sidebar.open && (
           <>
             <Sidebar
-              items={sidebarItems}
+              groups={sidebarGroups}
               activeSessionId={activeSessionId}
               width={sidebar.width}
-              onSelect={setActiveSessionId}
+              onSelect={focusSession}
               onClose={handleClose}
               onRenamed={handleRenamed}
+              onAddWindow={openWindow}
+              onSelectWindow={switchWindow}
+              onCloseWindow={handleCloseWindow}
+              onRenameWindow={renameWindowTitle}
             />
             <div
               role="separator"
@@ -407,27 +437,39 @@ export function Workspace() {
           </>
         )}
 
+        {/*
+          非アクティブなウィンドウも display:none でDOMに残す（RDD 14章）。
+          外すとWebSocketが切れて再接続とちらつきが起き、実行中のコマンドの画面も作り直しになる。
+          xtermは非表示になると描画を自動で止めるため、残しておくコストは小さい。
+        */}
         <main className="min-h-0 min-w-0 flex-1 p-2">
           {!loaded ? (
             <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
               読み込み中...
             </div>
-          ) : layout === null ? (
-            <div className="flex h-full flex-col items-center justify-center gap-3 text-muted-foreground">
-              <p className="text-sm">ターミナルがありません</p>
-              <NewTerminalButton
-                shells={shells}
-                defaultShellId={settings.defaultShellId}
-                onCreate={handleCreate}
-              />
-            </div>
           ) : (
-            <SplitPane
-              node={layout}
-              path={[]}
-              renderLeaf={renderLeaf}
-              onRatioChange={handleRatioChange}
-            />
+            windows.map((termWindow) => (
+              <div
+                key={termWindow.id}
+                className={termWindow.id === activeWindowId ? 'h-full w-full' : 'hidden'}
+              >
+                <WindowView
+                  termWindow={termWindow}
+                  visible={termWindow.id === activeWindowId}
+                  sessions={sessions}
+                  shells={shells}
+                  defaultShellId={settings.defaultShellId}
+                  onCreate={handleCreate}
+                  onActivate={focusSession}
+                  onClose={handleClose}
+                  onSplit={handleSplit}
+                  onExited={removeFromView}
+                  onRenamed={handleRenamed}
+                  onStatusChange={handleStatusChange}
+                  onRatioChange={handleRatioChange}
+                />
+              </div>
+            ))
           )}
         </main>
       </div>

@@ -1,5 +1,5 @@
 import { useRef, useState } from 'preact/hooks';
-import { X } from './icons';
+import { Plus, X } from './icons';
 import {
   countPaneStates,
   paneDotClasses,
@@ -20,13 +20,31 @@ export interface SidebarItem {
   readonly index: number | null;
 }
 
-interface SidebarProps {
+/** ターミナルをまとめるウィンドウの見出し（RDD 14章） */
+export interface SidebarGroup {
+  readonly windowId: string;
+  readonly title: string;
+  readonly active: boolean;
+  /** このウィンドウ内のターミナルを集約した状態。閉じている面の異変に気づくために出す */
+  readonly state: PaneState;
+  /** Alt+Shift+数字で切り替えられる序数（1〜9）。対象外は null */
+  readonly index: number | null;
+  /** 最後の1つは閉じられない（ターミナルを置く面が無くなるため） */
+  readonly canClose: boolean;
   readonly items: readonly SidebarItem[];
+}
+
+interface SidebarProps {
+  readonly groups: readonly SidebarGroup[];
   readonly activeSessionId: string | null;
   readonly width: number;
   readonly onSelect: (sessionId: string) => void;
   readonly onClose: (sessionId: string) => void;
   readonly onRenamed: (session: Session) => void;
+  readonly onAddWindow: () => void;
+  readonly onSelectWindow: (windowId: string) => void;
+  readonly onCloseWindow: (windowId: string) => void;
+  readonly onRenameWindow: (windowId: string, title: string) => void;
 }
 
 /**
@@ -34,18 +52,27 @@ interface SidebarProps {
  *
  * 分割が増えるとどのペインが入力待ちか見落としやすいため、
  * ペインを切り替えずに全体を見渡せる場所を用意する（herdr のサイドバーの考え方）。
+ *
+ * ウィンドウを分けても見落とさないよう、一覧は「いま見ているウィンドウ」に絞らず
+ * 全ウィンドウを並べる。上部の集計も全ウィンドウを横断して数える（RDD 14章）。
  */
 export function Sidebar({
-  items,
+  groups,
   activeSessionId,
   width,
   onSelect,
   onClose,
   onRenamed,
+  onAddWindow,
+  onSelectWindow,
+  onCloseWindow,
+  onRenameWindow,
 }: SidebarProps) {
-  const counts = countPaneStates(items.map((item) => item.state));
+  const counts = countPaneStates(groups.flatMap((group) => group.items.map((item) => item.state)));
+  const isEmpty = groups.every((group) => group.items.length === 0);
   // 名前を編集中の行。同時に編集できるのは1行だけ
   const [editingId, setEditingId] = useState<string | null>(null);
+  const [editingWindowId, setEditingWindowId] = useState<string | null>(null);
   const [draftTitle, setDraftTitle] = useState('');
   const [renameError, setRenameError] = useState(false);
   const committingRef = useRef(false);
@@ -56,6 +83,7 @@ export function Sidebar({
   const startEdit = (item: SidebarItem) => {
     cancelledRef.current = false; // 前回の編集で立ったフラグを持ち越さない
     setEditingId(item.sessionId);
+    setEditingWindowId(null);
     setDraftTitle(item.title);
     setRenameError(false);
   };
@@ -93,6 +121,190 @@ export function Sidebar({
     }
   };
 
+  const startWindowEdit = (group: SidebarGroup) => {
+    cancelledRef.current = false;
+    setEditingWindowId(group.windowId);
+    setEditingId(null);
+    setDraftTitle(group.title);
+    setRenameError(false);
+  };
+
+  const cancelWindowEdit = (group: SidebarGroup) => {
+    cancelledRef.current = true;
+    setDraftTitle(group.title);
+    setEditingWindowId(null);
+    setRenameError(false);
+  };
+
+  // ウィンドウ名はlocalStorageにしか無いので、サーバへ問い合わせず同期的に確定する
+  const commitWindowRename = (group: SidebarGroup) => {
+    const title = sanitizeTitle(draftTitle);
+    if (title === null) {
+      setRenameError(true);
+      return;
+    }
+    if (title !== group.title) onRenameWindow(group.windowId, title);
+    setEditingWindowId(null);
+    setRenameError(false);
+  };
+
+  const editorClasses = `h-5 min-w-0 flex-1 rounded border bg-background px-1 text-xs font-medium outline-none ${
+    renameError ? 'border-destructive' : 'border-input'
+  }`;
+
+  const renderItem = (item: SidebarItem) => {
+    const active = item.sessionId === activeSessionId;
+    return (
+      <li key={item.sessionId}>
+        <div
+          className={`group flex items-center gap-2 rounded px-2 py-1.5 ${
+            active ? 'bg-accent text-accent-foreground' : 'hover:bg-accent/50'
+          }`}
+        >
+          {/* keyを分けないと、Preactが編集UIと通常UIの子要素を再利用して壊す */}
+          {editingId === item.sessionId ? (
+            <div key="editor" className="flex min-w-0 flex-1 items-center gap-2">
+              <span
+                className={`inline-block size-2 shrink-0 rounded-full ${paneDotClasses(item.state)}`}
+                aria-hidden
+              />
+              <input
+                autoFocus
+                value={draftTitle}
+                maxLength={60}
+                onInput={(e) => {
+                  setDraftTitle(e.currentTarget.value);
+                  setRenameError(false);
+                }}
+                onBlur={() => {
+                  if (cancelledRef.current) {
+                    cancelledRef.current = false;
+                    return;
+                  }
+                  void commitRename(item);
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') void commitRename(item);
+                  if (e.key === 'Escape') cancelEdit(item);
+                }}
+                className={editorClasses}
+                aria-label="セッション名を編集"
+              />
+            </div>
+          ) : (
+            <button
+              key="row"
+              type="button"
+              className="flex min-w-0 flex-1 items-center gap-2 text-left"
+              title={`${item.title}（${item.shellLabel}） — ${paneStateLabel(item.state)}／ダブルクリックで名前を変更`}
+              aria-current={active ? 'true' : undefined}
+              onClick={() => onSelect(item.sessionId)}
+              // mousedownで開くと後続のmouseup/clickが元のボタン位置に届いて
+              // inputがblurし即座に閉じる。マウス操作の最後に来るdblclickで開く
+              onDblClick={() => startEdit(item)}
+            >
+              <span
+                className={`inline-block size-2 shrink-0 rounded-full ${paneDotClasses(item.state)}`}
+                aria-hidden
+              />
+              {item.index !== null && (
+                <span className="shrink-0 text-[10px] tabular-nums text-muted-foreground">
+                  {item.index}
+                </span>
+              )}
+              <span className="min-w-0 flex-1">
+                <span className="block truncate text-xs font-medium">{item.title}</span>
+                <span className="block truncate text-[10px] text-muted-foreground">
+                  {paneStateLabel(item.state)} · {item.shellLabel}
+                </span>
+              </span>
+            </button>
+          )}
+          <button
+            type="button"
+            className="shrink-0 rounded p-0.5 text-muted-foreground opacity-0 hover:bg-muted hover:text-foreground focus-visible:opacity-100 group-hover:opacity-100"
+            title={`${item.title} を閉じる`}
+            aria-label={`${item.title} を閉じる`}
+            onClick={() => onClose(item.sessionId)}
+          >
+            <X class="size-3" />
+          </button>
+        </div>
+      </li>
+    );
+  };
+
+  const renderGroupHeader = (group: SidebarGroup) => (
+    <div
+      className={`group flex items-center gap-2 rounded px-2 py-1 ${
+        group.active ? 'bg-accent/60' : 'hover:bg-accent/30'
+      }`}
+    >
+      {editingWindowId === group.windowId ? (
+        <div key="window-editor" className="flex min-w-0 flex-1 items-center gap-2">
+          <span
+            className={`inline-block size-2 shrink-0 rounded-full ${paneDotClasses(group.state)}`}
+            aria-hidden
+          />
+          <input
+            autoFocus
+            value={draftTitle}
+            maxLength={60}
+            onInput={(e) => {
+              setDraftTitle(e.currentTarget.value);
+              setRenameError(false);
+            }}
+            onBlur={() => {
+              if (cancelledRef.current) {
+                cancelledRef.current = false;
+                return;
+              }
+              commitWindowRename(group);
+            }}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') commitWindowRename(group);
+              if (e.key === 'Escape') cancelWindowEdit(group);
+            }}
+            className={editorClasses}
+            aria-label="ウィンドウ名を編集"
+          />
+        </div>
+      ) : (
+        <button
+          key="window-row"
+          type="button"
+          className="flex min-w-0 flex-1 items-center gap-2 text-left"
+          title={`${group.title} — ${paneStateLabel(group.state)}／ダブルクリックで名前を変更`}
+          aria-current={group.active ? 'true' : undefined}
+          onClick={() => onSelectWindow(group.windowId)}
+          onDblClick={() => startWindowEdit(group)}
+        >
+          <span
+            className={`inline-block size-2 shrink-0 rounded-full ${paneDotClasses(group.state)}`}
+            aria-hidden
+          />
+          <span className="min-w-0 flex-1 truncate text-[11px] font-semibold">{group.title}</span>
+          {group.index !== null && (
+            <span className="shrink-0 text-[10px] tabular-nums text-muted-foreground">
+              ⇧{group.index}
+            </span>
+          )}
+        </button>
+      )}
+      {group.canClose && (
+        <button
+          type="button"
+          className="shrink-0 rounded p-0.5 text-muted-foreground opacity-0 hover:bg-muted hover:text-foreground focus-visible:opacity-100 group-hover:opacity-100"
+          title={`${group.title} を閉じる`}
+          aria-label={`${group.title} を閉じる`}
+          onClick={() => onCloseWindow(group.windowId)}
+        >
+          <X class="size-3" />
+        </button>
+      )}
+    </div>
+  );
+
   return (
     <aside
       className="flex shrink-0 flex-col bg-muted/30"
@@ -100,8 +312,19 @@ export function Sidebar({
       aria-label="ターミナル一覧"
     >
       <div className="shrink-0 border-b px-3 py-2">
-        <div className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
-          ターミナル
+        <div className="flex items-center justify-between gap-2">
+          <div className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+            ターミナル
+          </div>
+          <button
+            type="button"
+            className="shrink-0 rounded p-0.5 text-muted-foreground hover:bg-muted hover:text-foreground"
+            title="ウィンドウを追加"
+            aria-label="ウィンドウを追加"
+            onClick={onAddWindow}
+          >
+            <Plus class="size-3.5" />
+          </button>
         </div>
         <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px]">
           {counts.blocked > 0 && (
@@ -116,94 +339,21 @@ export function Sidebar({
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto p-1">
-        {items.length === 0 ? (
+        {isEmpty && groups.length <= 1 ? (
           <p className="px-2 py-3 text-xs text-muted-foreground">ターミナルがありません</p>
         ) : (
-          <ul className="flex flex-col gap-0.5">
-            {items.map((item) => {
-              const active = item.sessionId === activeSessionId;
-              return (
-                <li key={item.sessionId}>
-                  <div
-                    className={`group flex items-center gap-2 rounded px-2 py-1.5 ${
-                      active ? 'bg-accent text-accent-foreground' : 'hover:bg-accent/50'
-                    }`}
-                  >
-                    {/* keyを分けないと、Preactが編集UIと通常UIの子要素を再利用して壊す */}
-                    {editingId === item.sessionId ? (
-                      <div key="editor" className="flex min-w-0 flex-1 items-center gap-2">
-                        <span
-                          className={`inline-block size-2 shrink-0 rounded-full ${paneDotClasses(item.state)}`}
-                          aria-hidden
-                        />
-                        <input
-                          autoFocus
-                          value={draftTitle}
-                          maxLength={60}
-                          onInput={(e) => {
-                            setDraftTitle(e.currentTarget.value);
-                            setRenameError(false);
-                          }}
-                          onBlur={() => {
-                            if (cancelledRef.current) {
-                              cancelledRef.current = false;
-                              return;
-                            }
-                            void commitRename(item);
-                          }}
-                          onKeyDown={(e) => {
-                            if (e.key === 'Enter') void commitRename(item);
-                            if (e.key === 'Escape') cancelEdit(item);
-                          }}
-                          className={`h-5 min-w-0 flex-1 rounded border bg-background px-1 text-xs font-medium outline-none ${
-                            renameError ? 'border-destructive' : 'border-input'
-                          }`}
-                          aria-label="セッション名を編集"
-                        />
-                      </div>
-                    ) : (
-                      <button
-                        key="row"
-                        type="button"
-                        className="flex min-w-0 flex-1 items-center gap-2 text-left"
-                        title={`${item.title}（${item.shellLabel}） — ${paneStateLabel(item.state)}／ダブルクリックで名前を変更`}
-                        aria-current={active ? 'true' : undefined}
-                        onClick={() => onSelect(item.sessionId)}
-                        // mousedownで開くと後続のmouseup/clickが元のボタン位置に届いて
-                        // inputがblurし即座に閉じる。マウス操作の最後に来るdblclickで開く
-                        onDblClick={() => startEdit(item)}
-                      >
-                        <span
-                          className={`inline-block size-2 shrink-0 rounded-full ${paneDotClasses(item.state)}`}
-                          aria-hidden
-                        />
-                        {item.index !== null && (
-                          <span className="shrink-0 text-[10px] tabular-nums text-muted-foreground">
-                            {item.index}
-                          </span>
-                        )}
-                        <span className="min-w-0 flex-1">
-                          <span className="block truncate text-xs font-medium">{item.title}</span>
-                          <span className="block truncate text-[10px] text-muted-foreground">
-                            {paneStateLabel(item.state)} · {item.shellLabel}
-                          </span>
-                        </span>
-                      </button>
-                    )}
-                    <button
-                      type="button"
-                      className="shrink-0 rounded p-0.5 text-muted-foreground opacity-0 hover:bg-muted hover:text-foreground focus-visible:opacity-100 group-hover:opacity-100"
-                      title={`${item.title} を閉じる`}
-                      aria-label={`${item.title} を閉じる`}
-                      onClick={() => onClose(item.sessionId)}
-                    >
-                      <X class="size-3" />
-                    </button>
-                  </div>
-                </li>
-              );
-            })}
-          </ul>
+          <div className="flex flex-col gap-1.5">
+            {groups.map((group) => (
+              <div key={group.windowId}>
+                {renderGroupHeader(group)}
+                {group.items.length === 0 ? (
+                  <p className="px-4 py-1 text-[10px] text-muted-foreground">（空）</p>
+                ) : (
+                  <ul className="flex flex-col gap-0.5 pl-2">{group.items.map(renderItem)}</ul>
+                )}
+              </div>
+            ))}
+          </div>
         )}
       </div>
     </aside>

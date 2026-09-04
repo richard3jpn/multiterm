@@ -31,6 +31,14 @@ interface TerminalPanelProps {
   readonly index: number | null;
   /** アクティブ（フォーカス対象）端末か（RDD 9.6章） */
   readonly active: boolean;
+  /**
+   * 表示中のウィンドウに属するか（RDD 14章）。
+   *
+   * 非表示のウィンドウは display:none で DOM に残すため、この端末はマウントされたまま
+   * サイズが 0 になる。その状態で PTY へサイズを送ると 80×24 などに縮んで
+   * 実行中の画面が崩れるので、非表示の間はフィットもリサイズ通知も行わない。
+   */
+  readonly visible: boolean;
   /** この端末をアクティブ化する（クリック・xtermフォーカス時） */
   readonly onActivate: (sessionId: string) => void;
   readonly onClose: (sessionId: string) => void;
@@ -82,6 +90,7 @@ export function TerminalPanel({
   shells,
   index,
   active,
+  visible,
   onActivate,
   onClose,
   onSplit,
@@ -92,10 +101,14 @@ export function TerminalPanel({
   const containerRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
+  const wsRef = useRef<WebSocket | null>(null);
   const [status, setStatus] = useState<SessionStatus>(session.status);
   // WS購読のEffectはsession.idだけで張り直すため、最新のコールバックをrefで参照する
   const onStatusChangeRef = useRef(onStatusChange);
   onStatusChangeRef.current = onStatusChange;
+  // 同じ理由で、表示中かどうかもrefで参照する（RDD 14章）
+  const visibleRef = useRef(visible);
+  visibleRef.current = visible;
   const [connected, setConnected] = useState(true);
   const [editing, setEditing] = useState(false);
   const [draftTitle, setDraftTitle] = useState(session.title);
@@ -147,6 +160,7 @@ export function TerminalPanel({
     });
 
     const ws = new WebSocket(buildWsUrl(session.id));
+    wsRef.current = ws;
     // PTY出力は生バイトで受け取り、xtermへ直接書き込む（JSONパースを挟まない）
     ws.binaryType = 'arraybuffer';
 
@@ -173,7 +187,9 @@ export function TerminalPanel({
     };
     ws.onopen = () => {
       setConnected(true);
-      ws.send(resizeMessage(term.cols, term.rows));
+      // 非表示ウィンドウでは fit が効かず cols/rows が既定値（80×24）のままなので送らない。
+      // 送るとバックエンドのPTYがその値に縮む（RDD 14章）。表示された時点で送り直す
+      if (visibleRef.current) ws.send(resizeMessage(term.cols, term.rows));
     };
     // 予期しない切断は可視化する（黙って入力を捨てない）。意図的なクリーンアップ時は抑止
     let disposed = false;
@@ -192,6 +208,8 @@ export function TerminalPanel({
     });
 
     const observer = new ResizeObserver(() => {
+      // display:none になると 0×0 で発火する。そのままフィットするとPTYが潰れる（RDD 14章）
+      if (!visibleRef.current) return;
       fit.fit();
       if (ws.readyState === WebSocket.OPEN) ws.send(resizeMessage(term.cols, term.rows));
     });
@@ -205,6 +223,7 @@ export function TerminalPanel({
       term.dispose();
       termRef.current = null;
       fitRef.current = null;
+      wsRef.current = null;
     };
     // セッションごとに端末・WSを1度だけ生成する（テーマ・フォントは別Effectで反映）
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -216,6 +235,28 @@ export function TerminalPanel({
       term.options.theme = XTERM_THEMES[theme === 'light' ? 'light' : 'dark'];
     }
   }, [theme]);
+
+  /**
+   * 表示に戻ったら測り直してPTYへ通知する（RDD 14章）。
+   *
+   * 隠れている間はフィットを止めているため cols/rows が古い。display の反映後でないと
+   * 親のサイズが取れないので次のフレームで実行し、それでも測れない場合は送らない
+   * （FitAddon は非表示要素に対して NaN を返す）。
+   */
+  useEffect(() => {
+    if (!visible) return;
+    const frame = requestAnimationFrame(() => {
+      const fit = fitRef.current;
+      const term = termRef.current;
+      const ws = wsRef.current;
+      if (!fit || !term) return;
+      const dims = fit.proposeDimensions();
+      if (!dims || Number.isNaN(dims.cols) || Number.isNaN(dims.rows)) return;
+      fit.fit();
+      if (ws?.readyState === WebSocket.OPEN) ws.send(resizeMessage(term.cols, term.rows));
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [visible]);
 
   // Alt+数字などでアクティブ化されたら実際のキーボードフォーカスを端末へ移す（RDD 9.6章）
   useEffect(() => {
