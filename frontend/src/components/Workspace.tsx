@@ -354,7 +354,7 @@ export function Workspace() {
                 ? 'bg-red-500/15 text-red-400'
                 : overallState === 'working'
                   ? 'bg-blue-500/15 text-blue-400'
-                  : 'bg-amber-400/15 text-amber-400'
+                  : 'bg-orange-300/15 text-orange-300'
             }`}
             title="すべてのターミナルのうち、最も注意が必要な状態"
           >

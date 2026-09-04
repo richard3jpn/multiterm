@@ -62,21 +62,21 @@ describe('状態の集計', () => {
 });
 
 describe('表示', () => {
-  it('状態色は status-style と揃える（実行中=青、待機=黄）', () => {
+  it('状態色は status-style と揃える（実行中=青、待機=オレンジ）', () => {
     expect(paneDotClasses('blocked')).toContain('bg-red-500');
     expect(paneDotClasses('blocked')).toContain('animate-pulse');
     expect(paneDotClasses('working')).toBe('bg-blue-500');
-    expect(paneDotClasses('idle')).toBe('bg-amber-400');
-    // done は待機と同じ黄（色では区別せず、上部の集約カウントで数だけ示す）
-    expect(paneDotClasses('done')).toBe('bg-amber-400');
+    expect(paneDotClasses('idle')).toBe('bg-orange-300');
+    // done は待機と同じオレンジ（色では区別せず、上部の集約カウントで数だけ示す）
+    expect(paneDotClasses('done')).toBe('bg-orange-300');
   });
 
   it('画面全体の外枠は手を動かす必要がある状態だけ縁取る', () => {
     expect(paneFrameClasses('blocked')).toContain('inset');
     expect(paneFrameClasses('blocked')).toContain('239,68,68');
-    // 待機・完了は黄で縁取る（作業が終わって手が空いたことに気づけるように）
-    expect(paneFrameClasses('idle')).toContain('251,191,36');
-    expect(paneFrameClasses('done')).toContain('251,191,36');
+    // 待機・完了はオレンジで縁取る（作業が終わって手が空いたことに気づけるように）
+    expect(paneFrameClasses('idle')).toContain('255,184,106');
+    expect(paneFrameClasses('done')).toContain('255,184,106');
     // 実行中は放っておいてよいので枠なし
     expect(paneFrameClasses('working')).toBe('');
   });

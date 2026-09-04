@@ -47,7 +47,7 @@ export const countPaneStates = (states: readonly PaneState[]): PaneStateCounts =
 };
 
 /**
- * サイドバー行の状態ドット（RDD 5章6項）。赤・黄・青の3系統。
+ * サイドバー行の状態ドット（RDD 5章6項）。赤・オレンジ・青の3系統。
  * done は待機と同じ青にしている（色では区別せず、上部の集約カウントで数だけ示す）。
  */
 export const paneDotClasses = (state: PaneState): string => {
@@ -57,9 +57,9 @@ export const paneDotClasses = (state: PaneState): string => {
     case 'working':
       return 'bg-blue-500';
     case 'done':
-      return 'bg-amber-400';
+      return 'bg-orange-300';
     case 'idle':
-      return 'bg-amber-400';
+      return 'bg-orange-300';
   }
 };
 
@@ -69,7 +69,7 @@ export const paneDotClasses = (state: PaneState): string => {
  *
  * エージェントを見張る使い方では、実行中は放っておけて、入力待ち（承認を求めている）と
  * 待機（作業が終わって手が空いた）こそ気づきたい。そのため縁取りを出すのはこの2つで、
- * 実行中は枠なしにしている。done は待機と同じ黄（色では区別せず、集約カウントで数だけ示す）。
+ * 実行中は枠なしにしている。done は待機と同じオレンジ（色では区別せず、集約カウントで数だけ示す）。
  */
 export const paneFrameClasses = (state: PaneState): string => {
   switch (state) {
@@ -77,7 +77,7 @@ export const paneFrameClasses = (state: PaneState): string => {
       return 'shadow-[inset_0_0_0_3px_rgba(239,68,68,1),inset_0_0_24px_rgba(239,68,68,0.45)]';
     case 'done':
     case 'idle':
-      return 'shadow-[inset_0_0_0_3px_rgba(251,191,36,1)]';
+      return 'shadow-[inset_0_0_0_3px_rgba(255,184,106,1)]';
     case 'working':
       return '';
   }
