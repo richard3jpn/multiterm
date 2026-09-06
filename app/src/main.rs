@@ -3,21 +3,146 @@
 //! ブラウザのタブではなく独立した窓で開く。中身は `multiterm-backend` と同じサーバで、
 //! 子プロセスとして起動するのではなくライブラリとして同居させている。
 //! プロセスが1つで済み、常駐メモリの小ささ（RDD 3章）をそのまま保てる。
+//!
+//! OSのタイトルバーは出さない（RDD 16.7）。アプリのヘッダーがその役目を兼ねるため、
+//! 窓の移動・リサイズ・最小化・最大化・閉じるは画面側から IPC で受けて実行する。
 
 // Windows でコンソール窓を出さない。デバッグビルドでは出したままにして、
 // パニックやログを目で追えるようにする
 #![cfg_attr(all(not(debug_assertions), target_os = "windows"), windows_subsystem = "windows")]
 
 use std::sync::mpsc;
+use tao::dpi::{LogicalSize, PhysicalSize};
 use tao::event::{Event, WindowEvent};
-use tao::event_loop::{ControlFlow, EventLoop};
+use tao::event_loop::{ControlFlow, EventLoopBuilder};
 use tao::platform::run_return::EventLoopExtRunReturn;
-use tao::window::WindowBuilder;
+use tao::window::{CursorIcon, ResizeDirection, WindowBuilder};
+use wry::http::Request;
 use wry::WebViewBuilder;
 
 /// 起動時の窓の大きさ。分割したターミナルが最初から2枚並ぶ程度を既定にする
 const WINDOW_WIDTH: f64 = 1280.0;
 const WINDOW_HEIGHT: f64 = 800.0;
+
+/// 枠を掴んだと見なす幅（論理px）。**画面側の判定と同じ値にすること**。
+/// ここだけ広げても、画面側が IPC を送ってこなければカーソルは変わらない。
+const RESIZE_INSET: f64 = 5.0;
+
+/// 画面から届く操作。IPCの文字列をこれへ直してイベントループへ流す
+enum UserEvent {
+    Minimize,
+    ToggleMaximize,
+    DragWindow,
+    Close,
+    MouseDown(i32, i32),
+    MouseMove(i32, i32),
+}
+
+/// ポインタが窓のどこにあるか。枠の上なら掴んでリサイズできる
+enum HitTest {
+    Client,
+    Left,
+    Right,
+    Top,
+    Bottom,
+    TopLeft,
+    TopRight,
+    BottomLeft,
+    BottomRight,
+}
+
+impl HitTest {
+    /// 枠の上なら、その辺に応じたリサイズ方向。内側なら None
+    fn resize_direction(&self) -> Option<ResizeDirection> {
+        match self {
+            HitTest::Left => Some(ResizeDirection::West),
+            HitTest::Right => Some(ResizeDirection::East),
+            HitTest::Top => Some(ResizeDirection::North),
+            HitTest::Bottom => Some(ResizeDirection::South),
+            HitTest::TopLeft => Some(ResizeDirection::NorthWest),
+            HitTest::TopRight => Some(ResizeDirection::NorthEast),
+            HitTest::BottomLeft => Some(ResizeDirection::SouthWest),
+            HitTest::BottomRight => Some(ResizeDirection::SouthEast),
+            HitTest::Client => None,
+        }
+    }
+
+    fn cursor(&self) -> CursorIcon {
+        match self {
+            HitTest::Left => CursorIcon::WResize,
+            HitTest::Right => CursorIcon::EResize,
+            HitTest::Top => CursorIcon::NResize,
+            HitTest::Bottom => CursorIcon::SResize,
+            HitTest::TopLeft => CursorIcon::NwResize,
+            HitTest::TopRight => CursorIcon::NeResize,
+            HitTest::BottomLeft => CursorIcon::SwResize,
+            HitTest::BottomRight => CursorIcon::SeResize,
+            HitTest::Client => CursorIcon::Default,
+        }
+    }
+}
+
+/// 窓の中の座標（論理px）から、枠のどこに居るかを判定する。
+///
+/// 4辺の内外をビットで持ってから組み合わせる。角は2辺が同時に立つので、
+/// 上下左右を個別に見るより分岐が素直になる。
+fn hit_test(size: PhysicalSize<u32>, x: i32, y: i32, scale: f64) -> HitTest {
+    const CLIENT: isize = 0b0000;
+    const LEFT: isize = 0b0001;
+    const RIGHT: isize = 0b0010;
+    const TOP: isize = 0b0100;
+    const BOTTOM: isize = 0b1000;
+    const TOP_LEFT: isize = TOP | LEFT;
+    const TOP_RIGHT: isize = TOP | RIGHT;
+    const BOTTOM_LEFT: isize = BOTTOM | LEFT;
+    const BOTTOM_RIGHT: isize = BOTTOM | RIGHT;
+
+    // 画面側は論理px（CSSピクセル）で送ってくるので、窓の物理サイズを論理へ直して比べる
+    let inset = RESIZE_INSET as i32;
+    let width = (size.width as f64 / scale) as i32;
+    let height = (size.height as f64 / scale) as i32;
+
+    let result = (LEFT * isize::from(x < inset))
+        | (RIGHT * isize::from(x >= width - inset))
+        | (TOP * isize::from(y < inset))
+        | (BOTTOM * isize::from(y >= height - inset));
+
+    match result {
+        LEFT => HitTest::Left,
+        RIGHT => HitTest::Right,
+        TOP => HitTest::Top,
+        BOTTOM => HitTest::Bottom,
+        TOP_LEFT => HitTest::TopLeft,
+        TOP_RIGHT => HitTest::TopRight,
+        BOTTOM_LEFT => HitTest::BottomLeft,
+        BOTTOM_RIGHT => HitTest::BottomRight,
+        CLIENT => HitTest::Client,
+        // 幅・高さが inset の2倍未満だと左右（上下）が同時に立つ。掴ませない
+        _ => HitTest::Client,
+    }
+}
+
+/// IPCの本文を `UserEvent` へ直す。壊れた入力は None（画面側の実装ミスで落とさない）
+fn parse_ipc(body: &str) -> Option<UserEvent> {
+    let mut parts = body.split([':', ',']);
+    let kind = parts.next()?;
+    match kind {
+        "minimize" => Some(UserEvent::Minimize),
+        "maximize" => Some(UserEvent::ToggleMaximize),
+        "drag_window" => Some(UserEvent::DragWindow),
+        "close" => Some(UserEvent::Close),
+        "mousedown" | "mousemove" => {
+            let x = parts.next()?.parse().ok()?;
+            let y = parts.next()?.parse().ok()?;
+            if kind == "mousedown" {
+                Some(UserEvent::MouseDown(x, y))
+            } else {
+                Some(UserEvent::MouseMove(x, y))
+            }
+        }
+        _ => None,
+    }
+}
 
 fn main() {
     // tao のイベントループはメインスレッドでしか回せない（Windows / macOS の制約）。
@@ -61,10 +186,12 @@ fn main() {
     };
     let url = format!("http://{address}");
 
-    let mut event_loop = EventLoop::new();
+    let mut event_loop = EventLoopBuilder::<UserEvent>::with_user_event().build();
     let window = match WindowBuilder::new()
         .with_title("MultiTerm")
-        .with_inner_size(tao::dpi::LogicalSize::new(WINDOW_WIDTH, WINDOW_HEIGHT))
+        // OSのタイトルバーは出さない。アプリのヘッダーがその役目を兼ねる（RDD 16.7）
+        .with_decorations(false)
+        .with_inner_size(LogicalSize::new(WINDOW_WIDTH, WINDOW_HEIGHT))
         .build(&event_loop)
     {
         Ok(window) => window,
@@ -76,7 +203,18 @@ fn main() {
         }
     };
 
-    let builder = WebViewBuilder::new().with_url(&url);
+    let proxy = event_loop.create_proxy();
+    let builder = WebViewBuilder::new()
+        .with_url(&url)
+        .with_ipc_handler(move |request: Request<String>| {
+            if let Some(event) = parse_ipc(request.body()) {
+                let _ = proxy.send_event(event);
+            }
+        })
+        // 非アクティブな窓の1クリック目をボタン操作として扱う。無いと
+        // 「窓を前に出すクリック」と「閉じるボタンのクリック」が二度手間になる
+        .with_accept_first_mouse(true);
+
     #[cfg(any(target_os = "windows", target_os = "macos"))]
     let webview = builder.build(&window);
     // Linux では WebView を GTK のコンテナへ入れる（wry の Unix 向け作法）
@@ -89,24 +227,51 @@ fn main() {
             None => Err(wry::Error::MessageSender),
         }
     };
-    if let Err(error) = webview {
-        eprintln!("[multiterm] WebViewを作成できません: {error}");
-        let _ = shutdown_tx.send(());
-        let _ = server.join();
-        std::process::exit(1);
-    }
+    let webview = match webview {
+        Ok(webview) => webview,
+        Err(error) => {
+            eprintln!("[multiterm] WebViewを作成できません: {error}");
+            let _ = shutdown_tx.send(());
+            let _ = server.join();
+            std::process::exit(1);
+        }
+    };
 
     // 窓を閉じたときにサーバへ終了を伝えるための置き場。イベントは複数回来るので Option で1度だけ送る
     let mut shutdown = Some(shutdown_tx);
+    // WebView は窓より先に畳む。閉じるときに take して drop する
+    let mut webview = Some(webview);
     // run ではなく run_return を使うのは、閉じたあとにサーバの後始末（PTYの終了）を
     // 待ってから抜けるため。run はそのままプロセスを終わらせてしまう。
     event_loop.run_return(move |event, _, control_flow| {
         *control_flow = ControlFlow::Wait;
-        if let Event::WindowEvent { event: WindowEvent::CloseRequested, .. } = event {
-            if let Some(sender) = shutdown.take() {
-                let _ = sender.send(());
+        match event {
+            Event::WindowEvent { event: WindowEvent::CloseRequested, .. }
+            | Event::UserEvent(UserEvent::Close) => {
+                let _ = webview.take();
+                if let Some(sender) = shutdown.take() {
+                    let _ = sender.send(());
+                }
+                *control_flow = ControlFlow::Exit;
             }
-            *control_flow = ControlFlow::Exit;
+            Event::UserEvent(UserEvent::Minimize) => window.set_minimized(true),
+            Event::UserEvent(UserEvent::ToggleMaximize) => {
+                window.set_maximized(!window.is_maximized());
+            }
+            Event::UserEvent(UserEvent::DragWindow) => {
+                let _ = window.drag_window();
+            }
+            Event::UserEvent(UserEvent::MouseDown(x, y)) => {
+                let hit = hit_test(window.inner_size(), x, y, window.scale_factor());
+                if let Some(direction) = hit.resize_direction() {
+                    let _ = window.drag_resize_window(direction);
+                }
+            }
+            Event::UserEvent(UserEvent::MouseMove(x, y)) => {
+                let hit = hit_test(window.inner_size(), x, y, window.scale_factor());
+                window.set_cursor_icon(hit.cursor());
+            }
+            _ => {}
         }
     });
 

@@ -125,3 +125,17 @@
     @apply font-sans;
     }
 }
+@layer utilities {
+  /*
+   * 窓のタイトルバー代わり（RDD 16.7）。OSの装飾を出していないため、
+   * ここをドラッグすると窓が動く。WebView2 123+ ならネイティブに効き、
+   * それ未満は mousedown を IPC で送るフォールバックが受け持つ。
+   */
+  .app-drag-region {
+    app-region: drag;
+  }
+  /* ドラッグ領域の中にあるボタン。これが無いと押したつもりで窓が動く */
+  .app-no-drag {
+    app-region: no-drag;
+  }
+}

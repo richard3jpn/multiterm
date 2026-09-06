@@ -39,6 +39,20 @@ export const ChevronDown = (props: IconProps) => (
   </Icon>
 );
 
+/** 窓の最小化（RDD 16.7）。lucide の Minus */
+export const Minus = (props: IconProps) => (
+  <Icon {...props}>
+    <path d="M5 12h14" />
+  </Icon>
+);
+
+/** 窓の最大化（RDD 16.7）。lucide の Square */
+export const Square = (props: IconProps) => (
+  <Icon {...props}>
+    <rect width="18" height="18" x="3" y="3" rx="2" />
+  </Icon>
+);
+
 export const Settings = (props: IconProps) => (
   <Icon {...props}>
     <path d="M9.671 4.136a2.34 2.34 0 0 1 4.659 0 2.34 2.34 0 0 0 3.319 1.915 2.34 2.34 0 0 1 2.33 4.033 2.34 2.34 0 0 0 0 3.831 2.34 2.34 0 0 1-2.33 4.033 2.34 2.34 0 0 0-3.319 1.915 2.34 2.34 0 0 1-4.659 0 2.34 2.34 0 0 0-3.32-1.915 2.34 2.34 0 0 1-2.33-4.033 2.34 2.34 0 0 0 0-3.831A2.34 2.34 0 0 1 6.35 6.051a2.34 2.34 0 0 0 3.319-1.915" />

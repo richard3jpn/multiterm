@@ -6,7 +6,13 @@ import { NewTerminalButton } from './NewTerminalButton';
 import { SettingsPanel } from './SettingsPanel';
 import { Sidebar } from './Sidebar';
 import type { SidebarGroup, SidebarItem } from './Sidebar';
+import { WindowControls } from './WindowControls';
 import { WindowView } from './WindowView';
+import {
+  isDesktopApp,
+  setupWindowResize,
+  startWindowDrag,
+} from '../features/window-controls/ipc';
 import {
   aggregatePaneState,
   paneDotClasses,
@@ -55,6 +61,14 @@ const SHELL_FETCH_MAX_ATTEMPTS = 20;
  * 逆に詰めすぎると全プロセスの走査が頻繁になり、測っている側が重くなる。
  */
 const METRICS_INTERVAL_MS = 2000;
+
+/**
+ * デスクトップの窓の中で動いているか（RDD 16.7）。
+ *
+ * 起動後に変わることはないのでモジュール読み込み時に一度だけ判定する。
+ * ブラウザのタブで開いたときは false になり、窓の操作UIを出さない。
+ */
+const desktopApp = isDesktopApp();
 
 export function Workspace() {
   const { theme, toggleTheme } = useTheme();
@@ -163,6 +177,22 @@ export function Workspace() {
       cancelled = true;
       clearInterval(timer);
     };
+  }, []);
+
+  // 窓の枠を掴んでリサイズできるようにする（RDD 16.7）。ブラウザでは何も登録しない
+  useEffect(() => setupWindowResize(), []);
+
+  /**
+   * ヘッダーの空白をドラッグして窓を動かす（RDD 16.7）。
+   *
+   * WebView2 123+ では CSS の `app-region: drag` が先に効くのでここへは来ない。
+   * それ未満のための保険。
+   */
+  const handleTitlebarMouseDown = useCallback((event: JSX.TargetedMouseEvent<HTMLDivElement>) => {
+    if (event.button !== 0) return;
+    // 押した先がボタンや入力欄なら動かさない（押したつもりで窓が動くのを防ぐ）
+    if ((event.target as HTMLElement).closest('button, input, a')) return;
+    startWindowDrag();
   }, []);
 
   // Alt+1〜9 で全ウィンドウ通しのN番目ペインへ、Alt+Shift+1〜9 でN番目の
@@ -397,9 +427,7 @@ export function Workspace() {
   );
 
   return (
-    <div
-      className={`flex h-dvh flex-col bg-background text-foreground ${paneFrameClasses(overallState)}`}
-    >
+    <div className="flex h-dvh flex-col bg-background text-foreground">
       <header className="flex shrink-0 items-center gap-3 border-b px-4 py-2">
         <Button
           variant="ghost"
@@ -411,36 +439,48 @@ export function Workspace() {
         >
           <PanelLeft />
         </Button>
-        <TerminalSquare className="size-5 text-primary" />
-        <h1 className="text-sm font-semibold">MultiTerm</h1>
-        <span className="text-xs text-muted-foreground">
-          {sessions.length} セッション（上限16）
-        </span>
-        {metrics !== null && (
-          <span
-            className="whitespace-nowrap text-xs tabular-nums text-muted-foreground"
-            title={`MultiTerm 全体（バックエンドと全ターミナル）の使用量。CPUは${metrics.cpuCount}コアに対する割合`}
-          >
-            CPU {formatCpuPercent(metrics.app.cpuPercent, metrics.cpuCount)} ·{' '}
-            {formatMemory(metrics.app.memoryBytes)}
+        {/*
+          デスクトップ版ではここが窓のタイトルバーを兼ねる（RDD 16.7）。
+          ボタンを1つも含めない範囲だけをドラッグ領域にしてあるので、
+          個々の要素へ app-no-drag を振らなくて済む。
+        */}
+        <div
+          className={`flex min-w-0 flex-1 items-center gap-3 ${desktopApp ? 'app-drag-region' : ''}`}
+          onMouseDown={desktopApp ? handleTitlebarMouseDown : undefined}
+        >
+          <TerminalSquare className="size-5 shrink-0 text-primary" />
+          <h1 className="shrink-0 text-sm font-semibold">MultiTerm</h1>
+          <span className="shrink-0 text-xs text-muted-foreground">
+            {sessions.length} セッション（上限16）
           </span>
-        )}
-        {overallState !== 'idle' && (
-          <span
-            className={`inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[11px] font-medium ${
-              overallState === 'blocked'
-                ? 'bg-red-500/15 text-red-400'
-                : overallState === 'working'
-                  ? 'bg-blue-500/15 text-blue-400'
-                  : 'bg-orange-300/15 text-orange-300'
-            }`}
-            title="すべてのターミナルのうち、最も注意が必要な状態"
-          >
-            <span className={`inline-block size-1.5 rounded-full ${paneDotClasses(overallState)}`} />
-            {paneStateLabel(overallState)}
-          </span>
-        )}
-        <div className="ml-auto flex items-center gap-2">
+          {metrics !== null && (
+            <span
+              className="whitespace-nowrap text-xs tabular-nums text-muted-foreground"
+              title={`MultiTerm 全体（バックエンドと全ターミナル）の使用量。CPUは${metrics.cpuCount}コアに対する割合`}
+            >
+              CPU {formatCpuPercent(metrics.app.cpuPercent, metrics.cpuCount)} ·{' '}
+              {formatMemory(metrics.app.memoryBytes)}
+            </span>
+          )}
+          {overallState !== 'idle' && (
+            <span
+              className={`inline-flex shrink-0 items-center gap-1.5 rounded-full px-2 py-0.5 text-[11px] font-medium ${
+                overallState === 'blocked'
+                  ? 'bg-red-500/15 text-red-400'
+                  : overallState === 'working'
+                    ? 'bg-blue-500/15 text-blue-400'
+                    : 'bg-orange-300/15 text-orange-300'
+              }`}
+              title="すべてのターミナルのうち、最も注意が必要な状態"
+            >
+              <span
+                className={`inline-block size-1.5 rounded-full ${paneDotClasses(overallState)}`}
+              />
+              {paneStateLabel(overallState)}
+            </span>
+          )}
+        </div>
+        <div className="flex items-center gap-2">
           <NewTerminalButton
             shells={shells}
             defaultShellId={settings.defaultShellId}
@@ -456,6 +496,7 @@ export function Workspace() {
             {theme === 'dark' ? <Sun /> : <Moon />}
           </Button>
         </div>
+        {desktopApp && <WindowControls />}
       </header>
 
       {errorMessage && (
@@ -464,7 +505,8 @@ export function Workspace() {
         </div>
       )}
 
-      <div ref={contentRef} className="flex min-h-0 flex-1">
+      {/* 状態の外枠はヘッダーより下だけ。ヘッダーはタイトルバーを兼ねる（RDD 16.6） */}
+      <div ref={contentRef} className={`flex min-h-0 flex-1 ${paneFrameClasses(overallState)}`}>
         {sidebar.open && (
           <>
             <Sidebar

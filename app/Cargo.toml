@@ -4,6 +4,10 @@ version = "1.0.0"
 edition = "2021"
 rust-version = "1.85"
 
+# exe へアイコンを埋め込む（Windows のみ。タスクバー・エクスプローラーに出す）
+[target.'cfg(windows)'.build-dependencies]
+winresource = "0.1"
+
 [dependencies]
 # サーバ本体。同じプロセスの中で動かすので、子プロセスとして起動はしない
 multiterm-backend = { path = "../backend-rs" }
