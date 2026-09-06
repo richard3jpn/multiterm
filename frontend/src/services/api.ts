@@ -1,4 +1,4 @@
-import type { ApiEnvelope, Session, ShellInfo } from '../types';
+import type { ApiEnvelope, MetricsSnapshot, Session, ShellInfo } from '../types';
 
 // 既定は配信元と同じオリジン（単一バイナリがフロントとAPIを同一ポートで配信するため）。
 // 開発時にViteの開発サーバから別ポートのバックエンドを叩く場合は VITE_API_URL で上書きする。
@@ -24,6 +24,10 @@ const requestJson = async <T>(path: string, init?: RequestInit): Promise<T> => {
 };
 
 export const fetchSessions = (): Promise<Session[]> => requestJson<Session[]>('/api/sessions');
+
+/** RDD 17章: アプリとターミナルのリソース使用量 */
+export const fetchMetrics = (): Promise<MetricsSnapshot> =>
+  requestJson<MetricsSnapshot>('/api/metrics');
 
 /** RDD 9.2章: 利用可能シェルの許可リスト */
 /** シェル一覧と、バックエンドがまだ検出中か（検出中なら後で取り直す） */

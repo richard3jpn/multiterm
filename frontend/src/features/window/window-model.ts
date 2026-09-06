@@ -23,6 +23,9 @@ export interface WindowsState {
 
 const AUTO_TITLE = /^Window (\d+)$/;
 
+/** Alt+数字で移動できる上限。1〜9 の9個しかキーが無い（RDD 14.5章） */
+const MAX_DIGIT_ORDINAL = 9;
+
 /** 自動採番の名前。閉じて空いた番号を埋める（改名済みの名前は採番に影響しない） */
 export const nextWindowTitle = (windows: readonly TermWindow[]): string => {
   const used = new Set<number>();
@@ -62,6 +65,23 @@ export const windowIdOfSession = (
 /** 全ウィンドウのセッションID（ウィンドウの並び順 → 各ウィンドウ内の視覚順） */
 export const collectAllSessionIds = (windows: readonly TermWindow[]): string[] =>
   windows.flatMap((window) => (window.layout === null ? [] : collectSessionIds(window.layout)));
+
+/**
+ * Alt+数字の序数を全ウィンドウ通しで振る（RDD 14.5章）。
+ *
+ * ウィンドウごとに1から振り直すと、別のウィンドウの同じ数字と衝突して
+ * どちらのターミナルへ飛ぶか決まらない。ウィンドウの並び順 → 各ウィンドウ内の
+ * 視覚順で通して数える。10個目以降はキーが無いので割り当てない。
+ */
+export const buildDigitOrdinals = (
+  windows: readonly TermWindow[],
+): ReadonlyMap<string, number> => {
+  const ordinals = new Map<string, number>();
+  collectAllSessionIds(windows)
+    .slice(0, MAX_DIGIT_ORDINAL)
+    .forEach((sessionId, order) => ordinals.set(sessionId, order + 1));
+  return ordinals;
+};
 
 /** 指定ウィンドウだけを差し替える（非破壊）。存在しないIDは何もしない */
 export const updateWindow = (

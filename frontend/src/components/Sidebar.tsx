@@ -6,9 +6,11 @@ import {
   paneStateLabel,
 } from '../features/status/pane-state';
 import type { PaneState } from '../features/status/pane-state';
+import { useSettings } from '../contexts/settings-context';
 import { sanitizeTitle } from '../features/session/title';
+import { formatCpuPercent, formatMemory } from '../features/metrics/format';
 import { renameSession } from '../services/api';
-import type { Session } from '../types';
+import type { Session, SessionUsage } from '../types';
 
 /** サイドバーに1行として並ぶターミナル */
 export interface SidebarItem {
@@ -18,6 +20,8 @@ export interface SidebarItem {
   readonly state: PaneState;
   /** Alt+数字で移動できる序数（1〜9）。対象外は null */
   readonly index: number | null;
+  /** このターミナルのリソース使用量（RDD 17章）。未取得は null */
+  readonly usage: SessionUsage | null;
 }
 
 /** ターミナルをまとめるウィンドウの見出し（RDD 14章） */
@@ -38,6 +42,8 @@ interface SidebarProps {
   readonly groups: readonly SidebarGroup[];
   readonly activeSessionId: string | null;
   readonly width: number;
+  /** 論理コア数（RDD 17章）。各行のCPU使用率をマシン全体に対する割合へ直すのに使う */
+  readonly cpuCount: number;
   readonly onSelect: (sessionId: string) => void;
   readonly onClose: (sessionId: string) => void;
   readonly onRenamed: (session: Session) => void;
@@ -60,6 +66,7 @@ export function Sidebar({
   groups,
   activeSessionId,
   width,
+  cpuCount,
   onSelect,
   onClose,
   onRenamed,
@@ -70,6 +77,9 @@ export function Sidebar({
 }: SidebarProps) {
   const counts = countPaneStates(groups.flatMap((group) => group.items.map((item) => item.state)));
   const isEmpty = groups.every((group) => group.items.length === 0);
+  // ターミナルのフォントサイズ（RDD 9.1章）を一覧の基準サイズにする。
+  // 各行の文字は em 指定なので、設定を変えるとサイドバーも一緒に拡大縮小する
+  const { settings } = useSettings();
   // 名前を編集中の行。同時に編集できるのは1行だけ
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingWindowId, setEditingWindowId] = useState<string | null>(null);
@@ -148,7 +158,7 @@ export function Sidebar({
     setRenameError(false);
   };
 
-  const editorClasses = `h-5 min-w-0 flex-1 rounded border bg-background px-1 text-xs font-medium outline-none ${
+  const editorClasses = `h-5 min-w-0 flex-1 rounded border bg-background px-1 text-[0.92em] font-medium outline-none ${
     renameError ? 'border-destructive' : 'border-input'
   }`;
 
@@ -208,15 +218,22 @@ export function Sidebar({
                 aria-hidden
               />
               {item.index !== null && (
-                <span className="shrink-0 text-[10px] tabular-nums text-muted-foreground">
+                <span className="shrink-0 text-[0.77em] tabular-nums text-muted-foreground">
                   {item.index}
                 </span>
               )}
               <span className="min-w-0 flex-1">
-                <span className="block truncate text-xs font-medium">{item.title}</span>
-                <span className="block truncate text-[10px] text-muted-foreground">
+                <span className="block truncate text-[0.92em] font-medium">{item.title}</span>
+                <span className="block truncate text-[0.77em] text-muted-foreground">
                   {paneStateLabel(item.state)} · {item.shellLabel}
                 </span>
+                {/* 重いターミナルを名指しできるようにする（RDD 17章） */}
+                {item.usage !== null && (
+                  <span className="block truncate text-[0.77em] tabular-nums text-muted-foreground">
+                    {formatCpuPercent(item.usage.cpuPercent, cpuCount)} ·{' '}
+                    {formatMemory(item.usage.memoryBytes)}
+                  </span>
+                )}
               </span>
             </button>
           )}
@@ -283,9 +300,9 @@ export function Sidebar({
             className={`inline-block size-2 shrink-0 rounded-full ${paneDotClasses(group.state)}`}
             aria-hidden
           />
-          <span className="min-w-0 flex-1 truncate text-[11px] font-semibold">{group.title}</span>
+          <span className="min-w-0 flex-1 truncate text-[0.85em] font-semibold">{group.title}</span>
           {group.index !== null && (
-            <span className="shrink-0 text-[10px] tabular-nums text-muted-foreground">
+            <span className="shrink-0 text-[0.77em] tabular-nums text-muted-foreground">
               ⇧{group.index}
             </span>
           )}
@@ -308,12 +325,12 @@ export function Sidebar({
   return (
     <aside
       className="flex shrink-0 flex-col bg-muted/30"
-      style={{ width: `${width}px` }}
+      style={{ width: `${width}px`, fontSize: `${settings.fontSize}px` }}
       aria-label="ターミナル一覧"
     >
       <div className="shrink-0 border-b px-3 py-2">
         <div className="flex items-center justify-between gap-2">
-          <div className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+          <div className="text-[0.77em] font-medium uppercase tracking-wide text-muted-foreground">
             ターミナル
           </div>
           <button
@@ -326,7 +343,7 @@ export function Sidebar({
             <Plus class="size-3.5" />
           </button>
         </div>
-        <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px]">
+        <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[0.85em]">
           {counts.blocked > 0 && (
             <span className="font-semibold text-red-400">入力待ち {counts.blocked}</span>
           )}
@@ -340,14 +357,14 @@ export function Sidebar({
 
       <div className="min-h-0 flex-1 overflow-y-auto p-1">
         {isEmpty && groups.length <= 1 ? (
-          <p className="px-2 py-3 text-xs text-muted-foreground">ターミナルがありません</p>
+          <p className="px-2 py-3 text-[0.92em] text-muted-foreground">ターミナルがありません</p>
         ) : (
           <div className="flex flex-col gap-1.5">
             {groups.map((group) => (
               <div key={group.windowId}>
                 {renderGroupHeader(group)}
                 {group.items.length === 0 ? (
-                  <p className="px-4 py-1 text-[10px] text-muted-foreground">（空）</p>
+                  <p className="px-4 py-1 text-[0.77em] text-muted-foreground">（空）</p>
                 ) : (
                   <ul className="flex flex-col gap-0.5 pl-2">{group.items.map(renderItem)}</ul>
                 )}

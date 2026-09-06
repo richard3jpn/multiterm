@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   activeWindow,
   addWindow,
+  buildDigitOrdinals,
   collectAllSessionIds,
   createWindow,
   findWindow,
@@ -131,5 +132,40 @@ describe('ウィンドウ内のフォーカス対象', () => {
 
   it('レイアウトが空なら null', () => {
     expect(resolveActiveSession(null, 'a')).toBeNull();
+  });
+});
+
+describe('Alt+数字の序数（RDD 14.5章）', () => {
+  it('ウィンドウをまたいで通し番号を振る', () => {
+    const ordinals = buildDigitOrdinals(state().windows);
+    expect(ordinals.get('a')).toBe(1);
+    expect(ordinals.get('b')).toBe(2);
+    expect(ordinals.get('c')).toBe(3);
+  });
+
+  it('10個目以降は割り当てない（Alt+数字は1〜9まで）', () => {
+    const ids = Array.from({ length: 11 }, (_, index) => `s${index + 1}`);
+    const layout = ids
+      .slice(1)
+      .reduce<LayoutNode>((node, id) => split(node, leaf(id)), leaf(ids[0]));
+    const ordinals = buildDigitOrdinals([createWindow('w1', 'Window 1', layout)]);
+    expect(ordinals.get('s9')).toBe(9);
+    expect(ordinals.has('s10')).toBe(false);
+    expect(ordinals.size).toBe(9);
+  });
+
+  it('空のウィンドウは飛ばして続きから数える', () => {
+    const windows = [
+      createWindow('w1', 'Window 1', leaf('a')),
+      createWindow('w2', 'Window 2', null),
+      createWindow('w3', 'Window 3', leaf('b')),
+    ];
+    const ordinals = buildDigitOrdinals(windows);
+    expect(ordinals.get('a')).toBe(1);
+    expect(ordinals.get('b')).toBe(2);
+  });
+
+  it('ターミナルが1つも無ければ空', () => {
+    expect(buildDigitOrdinals([createWindow('w1', 'Window 1', null)]).size).toBe(0);
   });
 });

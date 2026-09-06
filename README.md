@@ -25,7 +25,9 @@
 - **フォント設定**: 等幅プリセット（System Mono / Consolas / Courier New）とサイズ（10〜20px）をヘッダーの設定（⚙）から変更。全ターミナルへ即時反映、localStorageに保存
 - **シェル選択**: 新規ターミナルボタンの ▼、および分割ボタンから起動シェルを選択。バックエンドが検出した許可リストから選ぶ。Windows では cmd / PowerShell / WSL各ディストロ（zsh等・dotfile込み）
 - **セッション名変更**: パネルのタイトルをクリックしてインライン編集（Enter確定 / Escキャンセル）。リロード後も維持
-- **Alt+1〜9**: レイアウト上の並び順でターミナルへフォーカス移動
+- **配置の入れ替え**: パネルのヘッダーをドラッグして別のパネルへ落とすと、その側（上下左右）へ移動する。落ちる位置は半透明のオーバーレイで示す。同じウィンドウの中でのみ移動できる
+- **リソースモニタ**: ヘッダーにアプリ全体の CPU・メモリ、サイドバーの各行にターミナルごとの CPU・メモリを2秒間隔で表示。CPU使用率は論理コア数で割ったマシン全体に対する割合
+- **Alt+1〜9**: 全ウィンドウ通しの並び順でターミナルへフォーカス移動。他ウィンドウのターミナルを選ぶと、そのウィンドウへ切り替わってから移る（10個目以降には番号を割り当てない）
 
 ## サイドバー
 
@@ -59,7 +61,25 @@
 
 ### 起動
 
-プロジェクト直下の `MultiTerm起動.bat` をダブルクリックする。フロントをビルドし、Rust バイナリをビルドして起動し、待ち受け開始した時点でブラウザを自動で開く。
+実行ファイルは2つある。中身のサーバは同じで、入口だけが違う（RDD 16章）。
+
+| バイナリ | 役割 |
+|---|---|
+| `multiterm-backend` | サーバだけ動かす。画面はブラウザで開く |
+| `multiterm-app` | 同じプロセスの中でサーバを動かし、**独立した窓**も開く。ブラウザ不要 |
+
+**デスクトップアプリとして開く場合**:
+
+```powershell
+cargo build --release -p multiterm-app
+# 出力: target\release\multiterm-app.exe
+```
+
+Windows は WebView2（Windows 11 は標準搭載）、Linux は webkit2gtk を使う。
+Linux で `multiterm-app` をビルドする場合のみ gtk / webkit2gtk の開発パッケージが要る。
+`cargo build -p multiterm-backend` だけならこれらは不要。
+
+**ブラウザで開く場合**は、プロジェクト直下の `MultiTerm起動.bat` をダブルクリックする。フロントをビルドし、Rust バイナリをビルドして起動し、待ち受け開始した時点でブラウザを自動で開く。
 
 PowerShell から実行する場合:
 
@@ -130,6 +150,7 @@ cd frontend && npm test && npm run coverage
 | `PATCH /api/sessions/:id` | セッション名変更。ボディ `{ title: string }`（1〜30文字・制御文字禁止、違反400・不存在404） |
 | `DELETE /api/sessions/:id` | セッション破棄 |
 | `GET /api/shells` | 利用可能シェルの許可リスト（`{ id, label, path, args? }` の配列） |
+| `GET /api/metrics` | アプリ全体とターミナルごとの CPU・メモリ使用量、論理コア数（RDD 17章） |
 | WebSocket `/ws?sessionId=<id>` | PTY入出力の同期 |
 
 `args` はWindowsのwsl/powershell等の起動引数（バックエンドが検出時に構築する固定値。クライアントは `id` のみ指定でき、path/argsは注入できない）。
@@ -167,7 +188,9 @@ PTY出力は5ms窓でまとめて1フレームにして送る（WSフレーム�
 | フロントエンド | Preact 10 (TypeScript) + Vite 8 |
 | UI・スタイリング | Tailwind CSS v4 + 自前コンポーネント（状態別の動的クラス切替） |
 | ターミナル描画 | @xterm/xterm + @xterm/addon-webgl + @xterm/addon-fit |
-| テスト | cargo test（backend 78） / Vitest（frontend 69、カバレッジ80%閾値） |
+| デスクトップアプリ | wry 0.56 + tao 0.37（Windows: WebView2 / Linux: webkit2gtk） |
+| リソース計測 | sysinfo 0.39 |
+| テスト | cargo test（backend 78） / Vitest（frontend 164、カバレッジ80%閾値） |
 
 ## 実測値
 

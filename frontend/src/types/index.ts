@@ -33,3 +33,26 @@ export interface ShellInfo {
   readonly label: string;
   readonly path: string;
 }
+
+/** RDD 17章: プロセスツリー1本ぶんのリソース使用量 */
+export interface ProcessUsage {
+  /** 1コアを100%として数えた合計。マシンが複数コアなら100を超えうる */
+  readonly cpuPercent: number;
+  readonly memoryBytes: number;
+}
+
+/** RDD 17章: ターミナル1つぶんの使用量（シェルとその子孫の合計） */
+export interface SessionUsage {
+  readonly sessionId: string;
+  readonly cpuPercent: number;
+  readonly memoryBytes: number;
+}
+
+/** RDD 17章: リソース使用量の一式 */
+export interface MetricsSnapshot {
+  /** アプリ全体。バックエンド自身と全ターミナルのプロセスツリーの和集合 */
+  readonly app: ProcessUsage;
+  readonly sessions: readonly SessionUsage[];
+  /** 論理コア数。cpuPercent をマシン全体に対する割合へ直すのに使う */
+  readonly cpuCount: number;
+}

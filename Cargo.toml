@@ -1,0 +1,11 @@
+[workspace]
+resolver = "2"
+members = ["backend-rs", "app"]
+
+# 軽量化（RDD 3章）: サイズと実行速度を優先したリリースビルド。
+# workspace ではメンバー側の [profile] が無視されるため、ここへ集約する。
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true

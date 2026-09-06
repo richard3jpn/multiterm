@@ -22,6 +22,7 @@ import type { SplitDirection, SplitPath } from '../features/layout/layout-tree';
 import { useWorkspaceWindows } from '../hooks/use-workspace-windows';
 import { summarizeWindowClose, windowCloseMessage } from '../features/window/close-window';
 import { resolveDigitShortcut } from '../features/window/window-keys';
+import { buildDigitOrdinals, collectAllSessionIds } from '../features/window/window-model';
 import { loadSettings } from '../features/settings/settings';
 import {
   clampSidebarWidth,
@@ -30,8 +31,15 @@ import {
 } from '../features/sidebar/sidebar-state';
 import type { SidebarState } from '../features/sidebar/sidebar-state';
 import { resolveShellLabel } from '../features/settings/shell-label';
-import { createSession, deleteSession, fetchSessions, fetchShells } from '../services/api';
-import type { Session, SessionStatus, ShellInfo } from '../types';
+import { formatCpuPercent, formatMemory } from '../features/metrics/format';
+import {
+  createSession,
+  deleteSession,
+  fetchMetrics,
+  fetchSessions,
+  fetchShells,
+} from '../services/api';
+import type { MetricsSnapshot, Session, SessionStatus, ShellInfo } from '../types';
 
 const toErrorMessage = (error: unknown): string =>
   error instanceof Error ? error.message : '予期しないエラーが発生しました';
@@ -39,6 +47,14 @@ const toErrorMessage = (error: unknown): string =>
 /** シェル検出の完了を待つ間隔と上限。WSLのコールドスタートは実測で10秒以上かかる */
 const SHELL_FETCH_INTERVAL_MS = 2000;
 const SHELL_FETCH_MAX_ATTEMPTS = 20;
+
+/**
+ * リソース使用量の取得間隔（RDD 17章）。
+ *
+ * CPU使用率は前回計測との差分で出るため、空けすぎると平均化されて動きが見えなくなる。
+ * 逆に詰めすぎると全プロセスの走査が頻繁になり、測っている側が重くなる。
+ */
+const METRICS_INTERVAL_MS = 2000;
 
 export function Workspace() {
   const { theme, toggleTheme } = useTheme();
@@ -52,13 +68,13 @@ export function Workspace() {
   const {
     windows,
     activeWindowId,
-    activeLayout: layout,
     activeSessionId,
     initialize: initializeWindows,
     updateActiveLayout,
     addSession,
     removeSession,
     focusSession,
+    moveSession,
     openWindow,
     closeWindow,
     switchWindow,
@@ -68,6 +84,8 @@ export function Workspace() {
   const [statuses, setStatuses] = useState<Readonly<Record<string, SessionStatus>>>({});
   // 完了したがユーザーがまだ見ていないターミナル（herdr の done 相当）
   const [unseenDone, setUnseenDone] = useState<readonly string[]>([]);
+  // アプリとターミナルのリソース使用量（RDD 17章）。取得できるまでは null
+  const [metrics, setMetrics] = useState<MetricsSnapshot | null>(null);
   // 状態変化のコールバックから最新のアクティブIDを参照するためのref
   const activeSessionIdRef = useRef<string | null>(null);
   activeSessionIdRef.current = activeSessionId;
@@ -127,8 +145,30 @@ export function Workspace() {
     saveSidebarState(sidebar);
   }, [sidebar]);
 
-  // Alt+1〜9 でアクティブウィンドウ内のN番目ペインへ、Alt+Shift+1〜9 でN番目の
+  // リソース使用量を定期取得する（RDD 17章）。
+  // 取得に失敗してもターミナルの操作には関係しないので、エラー表示は出さず次回に任せる。
+  useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const snapshot = await fetchMetrics();
+        if (!cancelled) setMetrics(snapshot);
+      } catch {
+        // 計測が取れないだけ。画面は動かし続ける
+      }
+    };
+    void load();
+    const timer = setInterval(() => void load(), METRICS_INTERVAL_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, []);
+
+  // Alt+1〜9 で全ウィンドウ通しのN番目ペインへ、Alt+Shift+1〜9 でN番目の
   // ウィンドウへ移動する（RDD 9.6章・14章）。
+  // 番号は全ウィンドウ通しなので、いま見ていないウィンドウのターミナルへも飛ぶ。
+  // focusSession が所属ウィンドウへの切り替えまで面倒を見る。
   // キャプチャ段階で処理し、xtermがこれらのキーをシェルへ送るのを抑止する。
   useEffect(() => {
     const handler = (event: KeyboardEvent) => {
@@ -142,8 +182,7 @@ export function Workspace() {
         switchWindow(target.id);
         return;
       }
-      if (layout === null) return;
-      const target = collectSessionIds(layout)[shortcut.index - 1];
+      const target = collectAllSessionIds(windows)[shortcut.index - 1];
       if (target === undefined) return;
       event.preventDefault();
       event.stopPropagation();
@@ -151,7 +190,7 @@ export function Workspace() {
     };
     window.addEventListener('keydown', handler, true);
     return () => window.removeEventListener('keydown', handler, true);
-  }, [layout, windows, focusSession, switchWindow]);
+  }, [windows, focusSession, switchWindow]);
 
   // shellId 未指定は既定シェル、指定時はそのシェルで作成し既定も更新（RDD 9.5章）
   const handleCreate = useCallback(
@@ -318,13 +357,16 @@ export function Workspace() {
   /**
    * サイドバーの行をウィンドウごとにまとめる（RDD 14章）。
    *
-   * Alt+数字の序数は「いま見ているウィンドウのN番目」なので、番号を振るのは
-   * アクティブウィンドウの行だけ。他ウィンドウの行に番号を出すと嘘になる。
+   * Alt+数字の序数は全ウィンドウ通しなので、どのウィンドウの行にも出す。
+   * 番号を見れば、いま見ていないウィンドウのターミナルへも直接飛べる。
    */
+  const digitOrdinals = buildDigitOrdinals(windows);
+  // セッションIDから使用量を引けるようにする（RDD 17章）。未取得・終了直後は undefined
+  const usageBySession = new Map(metrics?.sessions.map((usage) => [usage.sessionId, usage]) ?? []);
   const sidebarGroups: SidebarGroup[] = windows.map((termWindow, windowOrder) => {
     const ids = termWindow.layout === null ? [] : collectSessionIds(termWindow.layout);
     const isActiveWindow = termWindow.id === activeWindowId;
-    const items: SidebarItem[] = ids.flatMap((sessionId, order) => {
+    const items: SidebarItem[] = ids.flatMap((sessionId) => {
       const session = sessions.find((s) => s.id === sessionId);
       if (!session) return [];
       const status = statuses[sessionId] ?? session.status;
@@ -334,7 +376,8 @@ export function Workspace() {
           title: session.title,
           shellLabel: resolveShellLabel(session.shell, shells),
           state: resolvePaneState(status, unseenDone.includes(sessionId)),
-          index: isActiveWindow && order < 9 ? order + 1 : null,
+          index: digitOrdinals.get(sessionId) ?? null,
+          usage: usageBySession.get(sessionId) ?? null,
         },
       ];
     });
@@ -373,6 +416,15 @@ export function Workspace() {
         <span className="text-xs text-muted-foreground">
           {sessions.length} セッション（上限16）
         </span>
+        {metrics !== null && (
+          <span
+            className="whitespace-nowrap text-xs tabular-nums text-muted-foreground"
+            title={`MultiTerm 全体（バックエンドと全ターミナル）の使用量。CPUは${metrics.cpuCount}コアに対する割合`}
+          >
+            CPU {formatCpuPercent(metrics.app.cpuPercent, metrics.cpuCount)} ·{' '}
+            {formatMemory(metrics.app.memoryBytes)}
+          </span>
+        )}
         {overallState !== 'idle' && (
           <span
             className={`inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[11px] font-medium ${
@@ -419,6 +471,7 @@ export function Workspace() {
               groups={sidebarGroups}
               activeSessionId={activeSessionId}
               width={sidebar.width}
+              cpuCount={metrics?.cpuCount ?? 1}
               onSelect={focusSession}
               onClose={handleClose}
               onRenamed={handleRenamed}
@@ -455,6 +508,7 @@ export function Workspace() {
               >
                 <WindowView
                   termWindow={termWindow}
+                  ordinals={digitOrdinals}
                   visible={termWindow.id === activeWindowId}
                   sessions={sessions}
                   shells={shells}
@@ -467,6 +521,7 @@ export function Workspace() {
                   onRenamed={handleRenamed}
                   onStatusChange={handleStatusChange}
                   onRatioChange={handleRatioChange}
+                  onMove={moveSession}
                 />
               </div>
             ))

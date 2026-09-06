@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'preact/hooks';
+import type { JSX } from 'preact';
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import { WebglAddon } from '@xterm/addon-webgl';
@@ -18,8 +19,9 @@ import {
 } from '../features/status/status-style';
 import { renameSession } from '../services/api';
 import { buildWsUrl, inputMessage, parseServerMessage, resizeMessage } from '../services/ws';
+import { resolveDropPosition } from '../features/layout/layout-tree';
 import type { Session, SessionStatus, ShellInfo } from '../types';
-import type { SplitDirection } from '../features/layout/layout-tree';
+import type { DropPosition, SplitDirection } from '../features/layout/layout-tree';
 
 interface TerminalPanelProps {
   readonly session: Session;
@@ -48,7 +50,26 @@ interface TerminalPanelProps {
   readonly onRenamed: (session: Session) => void;
   /** サイドバーで一覧表示するため、状態の変化を親へ伝える */
   readonly onStatusChange: (sessionId: string, status: SessionStatus) => void;
+  /** ドラッグで運ばれてきたペインを、このペインの指定した側へ置く（RDD 15章） */
+  readonly onMove: (sessionId: string, targetSessionId: string, position: DropPosition) => void;
 }
+
+/**
+ * ドラッグ中のペインを運ぶ独自MIME（RDD 15章）。
+ *
+ * `text/plain` にするとエディタやブラウザから流れてきた文字列も受け取ってしまう。
+ * 独自の型にしておけば、`dragover` の時点で `dataTransfer.types` を見るだけで
+ * 自分たちのドラッグかどうか判別できる（`getData` は drop まで読めない）。
+ */
+const DRAG_MIME = 'application/x-multiterm-session';
+
+/** 落とす位置のハイライト。落とした後にペインが占める側を半分だけ塗る */
+const DROP_OVERLAY: Readonly<Record<DropPosition, string>> = {
+  left: 'inset-y-0 left-0 w-1/2',
+  right: 'inset-y-0 right-0 w-1/2',
+  top: 'inset-x-0 top-0 h-1/2',
+  bottom: 'inset-x-0 bottom-0 h-1/2',
+};
 
 /**
  * ANSI 16色。Windows Terminal の既定スキーム「Campbell」に合わせる。
@@ -97,6 +118,7 @@ export function TerminalPanel({
   onExited,
   onRenamed,
   onStatusChange,
+  onMove,
 }: TerminalPanelProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
@@ -113,6 +135,8 @@ export function TerminalPanel({
   const [editing, setEditing] = useState(false);
   const [draftTitle, setDraftTitle] = useState(session.title);
   const [renameError, setRenameError] = useState(false);
+  // ドラッグ中のペインを、このペインのどちら側へ落とすか（null はドラッグが乗っていない）
+  const [dropPosition, setDropPosition] = useState<DropPosition | null>(null);
   const { theme } = useTheme();
   const { settings } = useSettings();
 
@@ -273,7 +297,13 @@ export function TerminalPanel({
     if (!term) return;
     term.options.fontFamily = resolveFontFamily(settings.fontFamilyId);
     term.options.fontSize = settings.fontSize;
+    // 非表示のウィンドウでは測れない。表示に戻るEffectが測り直して送る（RDD 14章）
+    if (!visibleRef.current) return;
     fitRef.current?.fit();
+    // フィットで桁数・行数が変わるので、PTYへ通知しないと折り返し位置が食い違い、
+    // 実行中のTUIの表示が崩れる（サイズ変更を伴う設定変更では必ず送る）
+    const ws = wsRef.current;
+    if (ws?.readyState === WebSocket.OPEN) ws.send(resizeMessage(term.cols, term.rows));
   }, [settings.fontFamilyId, settings.fontSize]);
 
   const committingRef = useRef(false);
@@ -312,17 +342,69 @@ export function TerminalPanel({
     }
   };
 
+  /**
+   * ドラッグが自分たちのペインのものか（RDD 15章）。
+   * `dragover` の時点では `getData` が読めないため、型の有無だけで判定する。
+   */
+  const isPaneDrag = (transfer: DataTransfer | null): transfer is DataTransfer =>
+    transfer !== null && transfer.types.includes(DRAG_MIME);
+
+  /** ポインタ位置から落とす側を決める。ペイン全体の矩形で測る */
+  const positionFromEvent = (event: JSX.TargetedDragEvent<HTMLDivElement>): DropPosition => {
+    const rect = event.currentTarget.getBoundingClientRect();
+    return resolveDropPosition(
+      rect.width,
+      rect.height,
+      event.clientX - rect.left,
+      event.clientY - rect.top,
+    );
+  };
+
   return (
     <div
       onMouseDown={() => onActivate(session.id)}
-      className={`flex h-full w-full min-h-0 min-w-0 flex-col overflow-hidden rounded-md border-4 transition-colors ${
+      onDragOver={(event) => {
+        const transfer = event.dataTransfer;
+        if (!isPaneDrag(transfer)) return;
+        // preventDefault しないとブラウザが drop を発火させない
+        event.preventDefault();
+        transfer.dropEffect = 'move';
+        setDropPosition(positionFromEvent(event));
+      }}
+      // 子要素へ移っただけの dragleave でハイライトが消えないよう、外へ出たときだけ消す
+      onDragLeave={(event) => {
+        if (event.currentTarget.contains(event.relatedTarget as Node | null)) return;
+        setDropPosition(null);
+      }}
+      onDrop={(event) => {
+        setDropPosition(null);
+        const dragged = event.dataTransfer?.getData(DRAG_MIME);
+        if (!dragged || dragged === session.id) return;
+        event.preventDefault();
+        onMove(dragged, session.id, positionFromEvent(event));
+      }}
+      className={`relative flex h-full w-full min-h-0 min-w-0 flex-col overflow-hidden rounded-md border-4 transition-colors ${
         connected ? statusFrameClasses(status) : 'border-gray-500 shadow-none'
       } ${active ? 'ring-2 ring-primary ring-offset-1 ring-offset-background' : ''}`}
     >
+      {dropPosition !== null && (
+        <div
+          className={`pointer-events-none absolute z-10 rounded-sm bg-primary/30 ring-2 ring-primary ${DROP_OVERLAY[dropPosition]}`}
+          aria-hidden
+        />
+      )}
       <div
+        // 名前を編集している間はドラッグさせない（テキスト選択と競合する）
+        draggable={!editing}
+        onDragStart={(event) => {
+          event.dataTransfer?.setData(DRAG_MIME, session.id);
+          if (event.dataTransfer) event.dataTransfer.effectAllowed = 'move';
+        }}
+        onDragEnd={() => setDropPosition(null)}
+        title="ドラッグして配置を変更"
         className={`flex shrink-0 items-center gap-2 border-b px-2 py-1 transition-colors ${
-          connected ? statusHeaderClasses(status) : 'bg-muted/50'
-        }`}
+          editing ? '' : 'cursor-grab active:cursor-grabbing'
+        } ${connected ? statusHeaderClasses(status) : 'bg-muted/50'}`}
       >
         {index !== null && (
           <span

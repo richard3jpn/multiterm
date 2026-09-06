@@ -1,3 +1,4 @@
+use crate::metrics::MetricsCollector;
 use crate::pty::session_manager::SessionManager;
 use crate::routes::sessions;
 use crate::security::origin::is_origin_allowed;
@@ -58,6 +59,8 @@ pub struct AppState {
     pub manager: Arc<SessionManager>,
     pub allowed_origins: Arc<Vec<String>>,
     pub shells: ShellRegistry,
+    /// リソース計測器（RDD 17章）。CPU使用率は前回値との差分で出るため使い回す
+    pub metrics: Arc<MetricsCollector>,
 }
 
 /// サーバ側Origin強制（RDD.md 5章9項）。
@@ -91,6 +94,21 @@ async fn shells(State(state): State<AppState>) -> Response {
         .into_response()
 }
 
+/// RDD 17章: アプリとターミナルのリソース使用量
+async fn metrics(State(state): State<AppState>) -> Response {
+    let pids = state.manager.session_pids();
+    let collector = Arc::clone(&state.metrics);
+    // 全プロセスの走査はミリ秒単位で待たされる。PTYの中継を止めないよう専用スレッドへ逃がす
+    match tokio::task::spawn_blocking(move || collector.snapshot(&pids)).await {
+        Ok(snapshot) => (StatusCode::OK, Json(ApiResponse::ok(snapshot))).into_response(),
+        Err(_) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiResponse::<()>::fail("リソース使用量を取得できませんでした")),
+        )
+            .into_response(),
+    }
+}
+
 /// RDD.md 5章12項: CORSはホワイトリストのオリジンのみ許可
 pub fn create_app(state: AppState) -> Router {
     let origins: Vec<HeaderValue> = state
@@ -108,6 +126,7 @@ pub fn create_app(state: AppState) -> Router {
     Router::new()
         .route("/api/health", get(health))
         .route("/api/shells", get(shells))
+        .route("/api/metrics", get(metrics))
         .nest("/api/sessions", sessions::router())
         .route("/ws", get(ws::handler::ws_route))
         // 画面もこのバイナリから配信する（フロント用の別プロセス・別ポートは不要）

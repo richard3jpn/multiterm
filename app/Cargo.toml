@@ -1,0 +1,14 @@
+[package]
+name = "multiterm-app"
+version = "1.0.0"
+edition = "2021"
+rust-version = "1.85"
+
+[dependencies]
+# サーバ本体。同じプロセスの中で動かすので、子プロセスとして起動はしない
+multiterm-backend = { path = "../backend-rs" }
+# サーバを動かすためのランタイム。窓のイベントループはメインスレッドを使うので別スレッドで回す
+tokio = { version = "1", features = ["rt-multi-thread", "sync"] }
+# WebView と窓。Windows は WebView2、Linux は webkit2gtk を使う
+wry = "0.56"
+tao = "0.37"

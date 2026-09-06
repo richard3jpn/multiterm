@@ -1,14 +1,15 @@
 import { NewTerminalButton } from './NewTerminalButton';
 import { SplitPane } from './SplitPane';
 import { TerminalPanel } from './TerminalPanel';
-import { collectSessionIds } from '../features/layout/layout-tree';
 import { resolveShellLabel } from '../features/settings/shell-label';
-import type { SplitDirection, SplitPath } from '../features/layout/layout-tree';
+import type { DropPosition, SplitDirection, SplitPath } from '../features/layout/layout-tree';
 import type { TermWindow } from '../features/window/window-model';
 import type { Session, SessionStatus, ShellInfo } from '../types';
 
 interface WindowViewProps {
   readonly termWindow: TermWindow;
+  /** Alt+数字の序数（全ウィンドウ通し）。10個目以降は含まれない（RDD 14.5章） */
+  readonly ordinals: ReadonlyMap<string, number>;
   /** 表示中のウィンドウか。非表示でもDOMには残す（RDD 14章） */
   readonly visible: boolean;
   readonly sessions: readonly Session[];
@@ -22,16 +23,19 @@ interface WindowViewProps {
   readonly onRenamed: (session: Session) => void;
   readonly onStatusChange: (sessionId: string, status: SessionStatus) => void;
   readonly onRatioChange: (path: SplitPath, ratio: number) => void;
+  /** ドラッグ&ドロップでペインの配置を入れ替える（RDD 15章） */
+  readonly onMove: (sessionId: string, targetSessionId: string, position: DropPosition) => void;
 }
 
 /**
  * 1つのウィンドウの中身（分割されたターミナル群）。
  *
- * Alt+数字の序数はウィンドウごとに1から振る。数字は「いま見ているウィンドウの
- * N番目」を指すため、ウィンドウをまたいで通し番号にはしない。
+ * Alt+数字の序数は全ウィンドウ通しで振られたものを受け取る。ウィンドウごとに
+ * 振り直すと別ウィンドウの同じ数字と衝突するため、採番は親で一括して行う。
  */
 export function WindowView({
   termWindow,
+  ordinals,
   visible,
   sessions,
   shells,
@@ -44,19 +48,17 @@ export function WindowView({
   onRenamed,
   onStatusChange,
   onRatioChange,
+  onMove,
 }: WindowViewProps) {
-  const orderedIds = termWindow.layout === null ? [] : collectSessionIds(termWindow.layout);
-
   const renderLeaf = (sessionId: string) => {
     const session = sessions.find((s) => s.id === sessionId);
     if (!session) return null;
-    const order = orderedIds.indexOf(sessionId);
     return (
       <TerminalPanel
         session={session}
         shellLabel={resolveShellLabel(session.shell, shells)}
         shells={shells}
-        index={order >= 0 && order < 9 ? order + 1 : null}
+        index={ordinals.get(sessionId) ?? null}
         // 隠れているウィンドウの端末にはフォーカスを渡さない。表示に戻った時点で
         // false→true と変わり、フォーカス移動のEffectが走る
         active={visible && sessionId === termWindow.activeSessionId}
@@ -67,6 +69,7 @@ export function WindowView({
         onExited={onExited}
         onRenamed={onRenamed}
         onStatusChange={onStatusChange}
+        onMove={onMove}
       />
     );
   };

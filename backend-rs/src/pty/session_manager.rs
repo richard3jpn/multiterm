@@ -58,6 +58,12 @@ struct PtyHandle {
     writer: Mutex<Box<dyn Write + Send>>,
     master: Mutex<Box<dyn portable_pty::MasterPty + Send>>,
     child: Mutex<Box<dyn portable_pty::Child + Send + Sync>>,
+    /// 起動したシェルのPID（RDD 17章）。リソース計測でプロセスツリーの根に使う。
+    ///
+    /// 生成時に一度だけ取り出して持つ。`child` から都度読むと、出力の多いセッションで
+    /// read/write と Mutex を奪い合うため。プロセスが終わってもPIDの値自体は変わらない
+    /// （存在するかは計測側が sysinfo で確かめる）。
+    pid: Option<u32>,
 }
 
 struct ManagedSession {
@@ -170,6 +176,16 @@ impl SessionManager {
 
     pub fn get(&self, id: &str) -> Option<SessionInfo> {
         self.sessions.lock().unwrap().get(id).map(|s| s.to_info())
+    }
+
+    /// 各セッションのシェルのPID（RDD 17章）。PIDを取れなかったセッションは含まない
+    pub fn session_pids(&self) -> Vec<(String, u32)> {
+        self.sessions
+            .lock()
+            .unwrap()
+            .values()
+            .filter_map(|session| session.pty.pid.map(|pid| (session.id.clone(), pid)))
+            .collect()
     }
 
     pub fn exists(&self, id: &str) -> bool {
@@ -396,11 +412,14 @@ fn spawn_pty(
         .take_writer()
         .map_err(|error| SessionError::Spawn(format!("PTY入力の取得に失敗しました: {error}")))?;
 
+    let pid = child.process_id();
+
     Ok((
         PtyHandle {
             writer: Mutex::new(writer),
             master: Mutex::new(pair.master),
             child: Mutex::new(child),
+            pid,
         },
         reader,
     ))

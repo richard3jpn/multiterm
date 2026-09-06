@@ -17,13 +17,11 @@ regex = "1"
 memchr = "2"
 encoding_rs = "0.8"
 futures-util = "0.3"
+# リソース計測（RDD 17章）。プロセスのCPU・メモリだけ使うので system 以外は落とす
+sysinfo = { version = "0.39", default-features = false, features = ["system"] }
 # フロントのビルド成果物をバイナリへ埋め込む（単一exe化）
 rust-embed = "8"
 mime_guess = "2"
 
-# 軽量化（RDD 3章）: サイズと実行速度を優先したリリースビルド
-[profile.release]
-opt-level = 3
-lto = true
-codegen-units = 1
-strip = true
+# リリースビルドの設定はワークスペースルートの Cargo.toml にある
+# （workspace ではメンバー側の [profile] が無視されるため）

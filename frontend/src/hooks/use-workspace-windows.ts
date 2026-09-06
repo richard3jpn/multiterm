@@ -13,8 +13,8 @@ import {
   updateWindow,
   windowIdOfSession,
 } from '../features/window/window-model';
-import { removeLeaf } from '../features/layout/layout-tree';
-import type { LayoutNode } from '../features/layout/layout-tree';
+import { moveLeaf, removeLeaf } from '../features/layout/layout-tree';
+import type { DropPosition, LayoutNode } from '../features/layout/layout-tree';
 import type { TermWindow, WindowsState } from '../features/window/window-model';
 import type { Session } from '../types';
 
@@ -108,6 +108,31 @@ export const useWorkspaceWindows = () => {
     });
   }, []);
 
+  /**
+   * ドラッグ&ドロップでペインの配置を入れ替える（RDD 15章）。
+   *
+   * 動かせるのは同じウィンドウの中だけ。ウィンドウをまたぐ移動は RDD 14.7 で
+   * スコープ外にしているため、所属が違うドロップは黙って無視する。
+   */
+  const moveSession = useCallback(
+    (sessionId: string, targetSessionId: string, position: DropPosition) => {
+      setState((current) => {
+        if (current === null) return current;
+        const windowId = windowIdOfSession(current.windows, targetSessionId);
+        if (windowId === undefined) return current;
+        if (windowIdOfSession(current.windows, sessionId) !== windowId) return current;
+        return updateWindow(current, windowId, (window) => ({
+          ...window,
+          layout:
+            window.layout === null
+              ? null
+              : moveLeaf(window.layout, sessionId, targetSessionId, position),
+        }));
+      });
+    },
+    [],
+  );
+
   const openWindow = useCallback(() => {
     setState((current) =>
       current === null
@@ -141,6 +166,7 @@ export const useWorkspaceWindows = () => {
     addSession,
     removeSession,
     focusSession,
+    moveSession,
     openWindow,
     closeWindow,
     switchWindow,
