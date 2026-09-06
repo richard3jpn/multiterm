@@ -16,9 +16,19 @@ use tao::dpi::{LogicalSize, PhysicalSize};
 use tao::event::{Event, WindowEvent};
 use tao::event_loop::{ControlFlow, EventLoopBuilder};
 use tao::platform::run_return::EventLoopExtRunReturn;
-use tao::window::{CursorIcon, ResizeDirection, WindowBuilder};
+#[cfg(target_os = "windows")]
+use tao::platform::windows::WindowBuilderExtWindows;
+use tao::window::{CursorIcon, Icon, ResizeDirection, WindowBuilder};
 use wry::http::Request;
 use wry::WebViewBuilder;
+
+/// 窓とタスクバーのアイコン（RDD 16.7）。
+///
+/// exe のリソースへ埋め込むだけでは**タスクバーに反映されない**。Windows は
+/// タスクバーのアイコンをウィンドウのアイコン（`WM_SETICON`）から取り、exe の
+/// リソースはエクスプローラーでの表示と、ウィンドウ側が未設定のときの
+/// フォールバックにすぎないため。ここで実行時にも読んで窓へ持たせる。
+const ICON_BYTES: &[u8] = include_bytes!("../../frontend/public/favicon.ico");
 
 /// 起動時の窓の大きさ。分割したターミナルが最初から2枚並ぶ程度を既定にする
 const WINDOW_WIDTH: f64 = 1280.0;
@@ -122,6 +132,18 @@ fn hit_test(size: PhysicalSize<u32>, x: i32, y: i32, scale: f64) -> HitTest {
     }
 }
 
+/// ICO から一番大きな絵を取り出して窓のアイコンにする。
+///
+/// 縮小は Windows がやるので、大きい絵を渡しておけばタスクバーでも粗くならない。
+/// 読めなくても起動は続ける（既定のアイコンになるだけで、動作には関係ない）。
+fn load_window_icon() -> Option<Icon> {
+    let dir = ico::IconDir::read(std::io::Cursor::new(ICON_BYTES)).ok()?;
+    let entry = dir.entries().iter().max_by_key(|entry| entry.width())?;
+    let image = entry.decode().ok()?;
+    let (width, height) = (image.width(), image.height());
+    Icon::from_rgba(image.rgba_data().to_vec(), width, height).ok()
+}
+
 /// IPCの本文を `UserEvent` へ直す。壊れた入力は None（画面側の実装ミスで落とさない）
 fn parse_ipc(body: &str) -> Option<UserEvent> {
     let mut parts = body.split([':', ',']);
@@ -187,13 +209,23 @@ fn main() {
     let url = format!("http://{address}");
 
     let mut event_loop = EventLoopBuilder::<UserEvent>::with_user_event().build();
-    let window = match WindowBuilder::new()
+    #[allow(unused_mut)]
+    let mut builder = WindowBuilder::new()
         .with_title("MultiTerm")
-        // OSのタイトルバーは出さない。アプリのヘッダーがその役目を兼ねる（RDD 16.7）
+        // OSのタイトルバーは出さない。アプリのヘッダーがその役目を兼ねる（RDD 16.6）
         .with_decorations(false)
-        .with_inner_size(LogicalSize::new(WINDOW_WIDTH, WINDOW_HEIGHT))
-        .build(&event_loop)
+        // 窓の左上と Alt+Tab に出るアイコン（ICON_SMALL）
+        .with_window_icon(load_window_icon())
+        .with_inner_size(LogicalSize::new(WINDOW_WIDTH, WINDOW_HEIGHT));
+
+    // **タスクバーのアイコンは別枠（ICON_BIG）。** tao の `with_window_icon` は
+    // ICON_SMALL しか設定しないため、これが無いとタスクバーだけ既定のアイコンのままになる。
+    #[cfg(target_os = "windows")]
     {
+        builder = builder.with_taskbar_icon(load_window_icon());
+    }
+
+    let window = match builder.build(&event_loop) {
         Ok(window) => window,
         Err(error) => {
             eprintln!("[multiterm] ウィンドウを作成できません: {error}");

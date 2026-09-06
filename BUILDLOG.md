@@ -1714,3 +1714,62 @@ exe は 5,207,552 → 5,427,712 bytes（+220KB ≒ ICO のサイズ）。
 ### テスト
 
 164件 → 169件（+5）。窓の枠の判定（4辺・角・内側・境界・窓が枠より小さい場合）。
+
+## Phase 39: タスクバーのアイコンと、起動時のコンソール窓（2026-09-07）
+
+Phase 38 で入れたアイコンがタスクバーに出ず、起動のたびに黒い窓が明滅していた。
+どちらも Windows 固有の作法を踏み外していたのが原因。
+
+### アイコン: Phase 38 の記述は誤りだった
+
+Phase 38 に「Windows ではタスクバー・エクスプローラー・窓のアイコンがすべて exe の
+リソースから取られる」と書いたが、**これは誤り**。実際には exe のリソースが効くのは
+エクスプローラーの表示で、**タスクバーはウィンドウの ICON_BIG を見る**。
+
+Windows のウィンドウアイコンは2枠あり、tao はそれぞれ別のAPIへ割り当てている:
+
+```rust
+// tao/src/platform_impl/windows/window.rs
+pub fn set_window_icon(...)  { ... set_for_window(hwnd, IconType::Small); }
+pub fn set_taskbar_icon(...) { ... set_for_window(hwnd, IconType::Big); }
+```
+
+`with_window_icon()` は **ICON_SMALL しか設定しない**。Phase 38 の実装はこれだけ
+だったため、ICON_BIG が空のままタスクバーが WebView2 のアイコンへ落ちていた。
+
+`WindowBuilderExtWindows::with_taskbar_icon()` を足して解決。
+tao のドキュメントにも "This sets `ICON_BIG`. A good ceiling here is 256x256." とある。
+
+**検証の仕方**: `WM_GETICON` を ICON_SMALL / ICON_BIG それぞれで送り、
+返ったハンドルを `Icon::FromHandle` で画像化して目で確かめた。
+
+| | 修正前 | 修正後 |
+|---|---|---|
+| ICON_SMALL | 60296015 | 60296015 |
+| **ICON_BIG** | **0** | **7081025** |
+
+ICO のデコードには `ico 0.5` を使った（`image` の ico feature は bmp と png を
+引き込むため避けた）。7エントリのうち一番大きい 256x256 を渡している。
+
+### 起動時のコンソール窓
+
+`multiterm-app` は GUI アプリ（`windows_subsystem = "windows"`）でコンソールを持たない。
+そこからコンソールアプリを起動すると、**Windows が新しいコンソール窓を作る**。
+
+シェル検出は起動のたびに走り、WSLディストロの数だけ回数も増える:
+
+```
+pwsh.exe -NoLogo -Command exit
+wsl.exe -l -v
+wsl.exe -d <distro> -- sh -lc "echo $SHELL"
+wsl.exe -d <distro> -- which zsh
+```
+
+`run_command` に `CREATE_NO_WINDOW`（0x08000000）を付けて解決。
+
+**検証**: 起動直後から250ms間隔で18秒間、窓を持つプロセスを監視した。
+`multiterm-app` 以外に窓を出したプロセスは無く、その間に
+`x-shell-detection` は `complete` まで進んだ（検出自体は動いている）。
+
+ターミナル作成時（PTY起動）は portable-pty が ConPTY を使うため元から窓が出ない。
+API でセッションを作って窓が増えないことも確認済み。

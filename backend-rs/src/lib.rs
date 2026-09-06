@@ -29,6 +29,8 @@ use crate::pty::shell_registry::detect_shells;
 use crate::pty::windows_shells::{build_windows_shells, parse_wsl_distros, WslShell};
 use crate::types::ShellInfo;
 use std::future::Future;
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
 use std::process::Stdio;
 use std::sync::Arc;
 use std::time::Duration;
@@ -40,14 +42,24 @@ use std::time::Duration;
 /// 必ず失敗し、ログインシェルがzsh→bash等へ誤検出されていた。
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(20);
 
+/// コンソール窓を作らずに子プロセスを起動するフラグ（Windows）。
+///
+/// **`multiterm-app` は GUI アプリなので、これが無いと窓が湧く。** GUIアプリには
+/// コンソールが割り当てられていないため、そこからコンソールアプリ（`wsl.exe` や
+/// `pwsh.exe`）を起動すると、Windows が新しいコンソール窓を作ってしまう。
+/// シェル検出は起動のたびに走り、WSLディストロの数だけ回数も増える。
+///
+/// 出典: <https://learn.microsoft.com/en-us/windows/win32/procthread/process-creation-flags>
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
 /// 外部コマンドを実行して stdout を返す。失敗・タイムアウトは None。
 async fn run_command(program: &str, args: &[&str]) -> Option<Vec<u8>> {
-    let future = tokio::process::Command::new(program)
-        .args(args)
-        .stdin(Stdio::null())
-        .stderr(Stdio::null())
-        .output();
-    match tokio::time::timeout(COMMAND_TIMEOUT, future).await {
+    let mut command = tokio::process::Command::new(program);
+    command.args(args).stdin(Stdio::null()).stderr(Stdio::null());
+    #[cfg(windows)]
+    command.creation_flags(CREATE_NO_WINDOW);
+    match tokio::time::timeout(COMMAND_TIMEOUT, command.output()).await {
         Ok(Ok(output)) if output.status.success() => Some(output.stdout),
         _ => None,
     }

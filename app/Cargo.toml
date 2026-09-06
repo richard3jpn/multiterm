@@ -16,3 +16,6 @@ tokio = { version = "1", features = ["rt-multi-thread", "sync"] }
 # WebView と窓。Windows は WebView2、Linux は webkit2gtk を使う
 wry = "0.56"
 tao = "0.37"
+# 窓のアイコンを ICO から読む。exe への埋め込み（build.rs）だけでは
+# タスクバーに反映されないため、実行時にも読んで窓へ持たせる
+ico = "0.5"
