@@ -6,15 +6,7 @@
 
 ## 現在の状態
 
-**未コミットの変更がある。**
-
-| 状態 | 対象 |
-|---|---|
-| コミット済み（`origin/main`、最新 `41c799c`） | Phase 31〜33（ウィンドウ切り替えまで） |
-| **未コミット** | Phase 34〜37。下記4件 |
-| **未コミット（Phase 34〜37 とは別系統）** | `Sidebar.tsx` / `TerminalPanel.tsx` にあった前セッションからの変更（サイドバーの文字サイズを em 基準にしてフォント設定へ連動、フォント変更時に非表示ウィンドウで `fit()` せず表示中は PTY へ resize を送る）。Phase 34〜37 の変更と同じファイルに混在している |
-
-### Phase 34〜37 の内容
+**すべてコミット・push 済み**（`origin/main`、最新 `9c483f1`）。
 
 | Phase | 内容 | 主な変更先 |
 |---|---|---|
@@ -22,12 +14,17 @@
 | 35 | ウィンドウ内のペイン配置変更（D&D） | `layout-tree.ts` / `TerminalPanel.tsx` / `use-workspace-windows.ts` / RDD 15章 |
 | 36 | デスクトップアプリ化（workspace 分割 + wry） | ルート `Cargo.toml` / `backend-rs/src/lib.rs` / `app/` / RDD 16章 |
 | 37 | リソースモニタ（sysinfo） | `metrics.rs` / `session_manager.rs` / `Sidebar.tsx` / RDD 17章 |
+| 38 | OSのタイトルバーを消し、カスタムタイトルバーとアイコンを入れる | `app/src/main.rs` / `WindowControls.tsx` / `window-controls/ipc.ts` / RDD 16.6〜16.8 |
+| 39 | タスクバーのアイコン（ICON_BIG）と、起動時のコンソール窓を修正 | `app/src/main.rs` / `backend-rs/src/lib.rs` / RDD 16.7〜16.9 |
 
-vitest 164件 GREEN（開始時140） / `tsc -b` 通過 / oxlint は既存の警告2件のみ /
+`Sidebar.tsx` と `TerminalPanel.tsx` にあった前セッション由来の変更
+（サイドバーの文字サイズを em 基準にしてフォント設定へ連動、フォント変更時に
+非表示ウィンドウで `fit()` せず表示中は PTY へ resize を送る）は、
+同じファイルに混在していて分離できなかったため Phase 34〜37 のコミットに含めた。
+
+vitest 169件 GREEN（開始時140） / `tsc -b` 通過 / oxlint は既存の警告2件のみ /
 `cargo build --release` はエラーなし（既存の dead_code 警告3件のみ）。
-実機確認まで完了（詳細は BUILDLOG.md Phase 34〜37）。
-
-未追跡: `terraform/` — 旧PCの OneDrive 側にしか無かった5ファイルを退避したもの。
+実機確認まで完了（詳細は BUILDLOG.md Phase 34〜39）。
 
 ---
 
