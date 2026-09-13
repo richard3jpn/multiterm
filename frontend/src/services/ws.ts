@@ -17,6 +17,7 @@ const TAG_REPLAY = 0x02;
 const TAG_STATUS = 0x03;
 const TAG_EXIT = 0x04;
 const TAG_ERROR = 0x05;
+const TAG_RESYNC = 0x06;
 
 // --- クライアント → サーバ ---
 const CLIENT_TAG_INPUT = 0x01;
@@ -27,7 +28,7 @@ const decoder = new TextDecoder();
 
 /**
  * サーバからのWSバイナリフレームを検証してパースする。不正はnull（外部データを信頼しない）。
- * data / replay は生バイトのまま返し、xtermへ直接書き込む。
+ * data / replay / resync は生バイトのまま返し、xtermへ直接書き込む。
  */
 export const parseServerMessage = (raw: ArrayBuffer): ServerMessage | null => {
   const bytes = new Uint8Array(raw);
@@ -38,6 +39,8 @@ export const parseServerMessage = (raw: ArrayBuffer): ServerMessage | null => {
       return { type: 'data', data: payload };
     case TAG_REPLAY:
       return { type: 'replay', data: payload };
+    case TAG_RESYNC:
+      return { type: 'resync', data: payload };
     case TAG_STATUS: {
       // 0=running / 1=idle / 2=waiting-input（SESSION_STATUSES の並びと一致）
       const status = SESSION_STATUSES[payload[0]];

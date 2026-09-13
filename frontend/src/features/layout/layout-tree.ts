@@ -62,6 +62,17 @@ export const removeLeaf = (node: LayoutNode, sessionId: string): LayoutNode | nu
 /** ドラッグしたペインを、落とした先のペインのどちら側へ置くか（RDD 15章） */
 export type DropPosition = 'left' | 'right' | 'top' | 'bottom';
 
+/**
+ * ドラッグ中のペインを運ぶ独自MIME（RDD 15章）。
+ *
+ * `text/plain` にするとエディタやブラウザから流れてきた文字列も受け取ってしまう。
+ * 独自の型にしておけば、`dragover` の時点で `dataTransfer.types` を見るだけで
+ * 自分たちのドラッグかどうか判別できる（`getData` は drop まで読めない）。
+ *
+ * 落とす先がペインとサイドバーの2箇所あるため、型の定義と同じ場所に置いて共有する。
+ */
+export const DRAG_MIME = 'application/x-multiterm-session';
+
 /** 落とす位置から分割の向きを決める。左右に並べるのが vertical、上下が horizontal */
 const directionOf = (position: DropPosition): SplitDirection =>
   position === 'left' || position === 'right' ? 'vertical' : 'horizontal';
@@ -118,14 +129,21 @@ export const moveLeaf = (
   return insertBeside(removed, targetSessionId, { type: 'leaf', sessionId }, position);
 };
 
+/** 左右へ落とすと見なす帯の幅（ペイン幅に対する割合）。両端にこの幅で取る */
+const SIDE_BAND = 0.25;
+
 /**
  * ペインのどこへ落としたかから、挿し込む向きを決める（RDD 15章）。
  *
- * 4辺のうち最も近い辺を選ぶ。辺までの距離はペインの幅・高さで正規化する。
- * 正規化しないと、横長のペインでは左右がほぼ選ばれなくなる。
+ * 左右の端の帯に入っていれば左右、外なら上半分・下半分で上下に振る。
+ *
+ * 4辺までの距離で決めると、判定領域が対角線で切った三角形になり、上下の三角形が
+ * 上端・下端の全幅に接する。ドラッグはヘッダーを掴む操作なので相手のヘッダー行付近を
+ * 通ることになり、その高さでは左右の領域が数十pxしか無く、ほぼ必ず上下へ倒れていた。
+ * 帯なら高さに関係なく左右へ落とせる。
  *
  * 中央付近でも必ずいずれかの辺に倒れるので、「落とせない場所」は作らない。
- * 距離が並んだときは left → right → top → bottom の順で決める（結果を決定的にするため）。
+ * 境界はどちらも外側を優先しない（結果を決定的にするため、ちょうど中央は bottom）。
  */
 export const resolveDropPosition = (
   width: number,
@@ -135,15 +153,10 @@ export const resolveDropPosition = (
 ): DropPosition => {
   // 0除算を避ける。サイズが取れない状況では右に置く
   if (width <= 0 || height <= 0) return 'right';
-  const distances: ReadonlyArray<readonly [DropPosition, number]> = [
-    ['left', offsetX / width],
-    ['right', (width - offsetX) / width],
-    ['top', offsetY / height],
-    ['bottom', (height - offsetY) / height],
-  ];
-  return distances.reduce((nearest, current) =>
-    current[1] < nearest[1] ? current : nearest,
-  )[0];
+  const horizontal = offsetX / width;
+  if (horizontal < SIDE_BAND) return 'left';
+  if (horizontal > 1 - SIDE_BAND) return 'right';
+  return offsetY / height < 0.5 ? 'top' : 'bottom';
 };
 
 /** 生存セッション集合にない葉を除去する（RDD 7章: バックエンドをSSOTとする） */
@@ -170,6 +183,53 @@ export const updateRatio = (node: LayoutNode, path: SplitPath, ratio: number): L
   }
   const [head, ...rest] = path;
   return { ...node, [head]: updateRatio(node[head], rest, ratio) };
+};
+
+/** レイアウトの右側へ葉を足す（非破壊）。空レイアウトなら最初の葉になる */
+export const appendLeafRight = (layout: LayoutNode | null, sessionId: string): LayoutNode =>
+  layout === null
+    ? { type: 'leaf', sessionId }
+    : {
+        type: 'split',
+        direction: 'vertical',
+        ratio: 0.5,
+        first: layout,
+        second: { type: 'leaf', sessionId },
+      };
+
+/**
+ * 指定した向きに並ぶ枠がいくつ分か数える（RDD 18章）。
+ *
+ * 同じ向きの分割が続く限り足し合わせ、向きが変わったところで1枠として打ち切る。
+ * 左右の均等化をするとき、上下にどう割れているかは1枠として扱えばよい。
+ */
+const countSlots = (node: LayoutNode, direction: SplitDirection): number =>
+  node.type === 'split' && node.direction === direction
+    ? countSlots(node.first, direction) + countSlots(node.second, direction)
+    : 1;
+
+/**
+ * 指定した向きの分割を、葉が同じ大きさになるように割り直す（RDD 18章、非破壊）。
+ *
+ * 比率は分割ノード1つにつき1つしかなく、葉の大きさは祖先の比率の積で決まる。
+ * そのため同じ向きが入れ子になっていると、全部を0.5にしても均等にならない
+ * （3枚並びが 50% / 25% / 25% になる）。左右それぞれが何枠分かを数えて割り当てる。
+ *
+ * 同じ向きに11枚以上並ぶと 1/11 が下限0.1を下回るため、そこは厳密には均等にならない。
+ * 比率が0になるとレイアウトの読み込み時に丸ごと捨てられるので、下限で止めるほうを取る。
+ */
+export const equalizeRatios = (node: LayoutNode, direction: SplitDirection): LayoutNode => {
+  if (node.type !== 'split') return node;
+  const first = equalizeRatios(node.first, direction);
+  const second = equalizeRatios(node.second, direction);
+  const ratio =
+    node.direction === direction
+      ? clampRatio(
+          countSlots(first, direction) / (countSlots(first, direction) + countSlots(second, direction)),
+        )
+      : node.ratio;
+  if (ratio === node.ratio && first === node.first && second === node.second) return node;
+  return { ...node, ratio, first, second };
 };
 
 export const collectSessionIds = (node: LayoutNode): string[] =>

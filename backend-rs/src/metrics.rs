@@ -3,7 +3,10 @@
 //! CPU使用率は2回の計測の差分から出る。そのため `System` は持ち回して連続で更新する。
 //! 呼ばれるたびに作り直すと差分が取れず、常に 0% になる。
 
+mod gpu;
+
 use crate::types::{MetricsSnapshot, ProcessUsage, SessionUsage};
+use gpu::Gpu;
 use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
 use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System};
@@ -16,15 +19,25 @@ type ChildrenMap = HashMap<Pid, Vec<Pid>>;
 /// `System` が前回値を保持しているため、インスタンスを使い回す前提で作られている。
 pub struct MetricsCollector {
     system: Mutex<System>,
+    /// GPUカウンタも前回値との差分で出るため、同じく持ち回す（RDD 17.6章）
+    gpu: Mutex<Gpu>,
     /// このプロセス自身のPID。アプリ全体の集計はここを根の1つにする
     own_pid: Pid,
+    /// 物理メモリの総量。起動中に変わらないので一度だけ測る（RDD 17.6章）
+    total_memory_bytes: u64,
 }
 
 impl MetricsCollector {
     pub fn new() -> Self {
+        let mut system = System::new();
+        // プロセスの更新では埋まらないため、総量はここで別に読む
+        system.refresh_memory();
+        let total_memory_bytes = system.total_memory();
         Self {
-            system: Mutex::new(System::new()),
+            system: Mutex::new(system),
+            gpu: Mutex::new(Gpu::new()),
             own_pid: Pid::from_u32(std::process::id()),
+            total_memory_bytes,
         }
     }
 
@@ -39,6 +52,7 @@ impl MetricsCollector {
         );
 
         let children = children_map(&system);
+        let gpu_by_pid = self.gpu.lock().unwrap().usage_by_pid();
 
         // アプリ全体は「自分のツリー」と「各セッションのツリー」の和集合で測る。
         // 自分の子孫を辿るだけにしないのは、Windows の ConPTY ではシェルが
@@ -46,16 +60,17 @@ impl MetricsCollector {
         let mut roots = Vec::with_capacity(session_pids.len() + 1);
         roots.push(self.own_pid);
         roots.extend(session_pids.iter().map(|(_, pid)| Pid::from_u32(*pid)));
-        let app = sum_forest(&system, &children, &roots);
+        let app = sum_forest(&system, &children, &roots, &gpu_by_pid);
 
         let sessions = session_pids
             .iter()
             .map(|(session_id, pid)| {
-                let usage = sum_forest(&system, &children, &[Pid::from_u32(*pid)]);
+                let usage = sum_forest(&system, &children, &[Pid::from_u32(*pid)], &gpu_by_pid);
                 SessionUsage {
                     session_id: session_id.clone(),
                     cpu_percent: usage.cpu_percent,
                     memory_bytes: usage.memory_bytes,
+                    gpu_percent: usage.gpu_percent,
                 }
             })
             .collect();
@@ -65,6 +80,8 @@ impl MetricsCollector {
             sessions,
             // cpu_percent は1コアを100%として数えるので、全体に対する割合はこれで割る
             cpu_count: std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1),
+            // memory_bytes を割合へ直すのに使う
+            total_memory_bytes: self.total_memory_bytes,
         }
     }
 }
@@ -90,9 +107,15 @@ fn children_map(system: &System) -> ChildrenMap {
 ///
 /// 根同士が親子関係にある場合に二重計上しないよう、訪問済みのPIDは飛ばす。
 /// PIDの使い回しで親子が循環していても、同じ理由で無限ループにならない。
-fn sum_forest(system: &System, children: &ChildrenMap, roots: &[Pid]) -> ProcessUsage {
+fn sum_forest(
+    system: &System,
+    children: &ChildrenMap,
+    roots: &[Pid],
+    gpu_by_pid: &HashMap<u32, f32>,
+) -> ProcessUsage {
     let mut cpu_percent = 0.0;
     let mut memory_bytes = 0;
+    let mut gpu_percent = 0.0;
     let mut seen: HashSet<Pid> = HashSet::new();
     let mut stack: Vec<Pid> = roots.to_vec();
 
@@ -105,10 +128,12 @@ fn sum_forest(system: &System, children: &ChildrenMap, roots: &[Pid]) -> Process
             cpu_percent += process.cpu_usage();
             memory_bytes += process.memory();
         }
+        // GPUは sysinfo ではなくPDHから来るため、プロセスが居なくても引ける
+        gpu_percent += gpu_by_pid.get(&pid.as_u32()).copied().unwrap_or(0.0);
         if let Some(kids) = children.get(&pid) {
             stack.extend(kids);
         }
     }
 
-    ProcessUsage { cpu_percent, memory_bytes }
+    ProcessUsage { cpu_percent, memory_bytes, gpu_percent }
 }

@@ -1,4 +1,4 @@
-import { collectSessionIds } from '../layout/layout-tree';
+import { appendLeafRight, collectSessionIds, removeLeaf } from '../layout/layout-tree';
 import type { LayoutNode } from '../layout/layout-tree';
 
 /**
@@ -139,6 +139,47 @@ export const removeWindow = (state: WindowsState, windowId: string): WindowsStat
   return {
     windows: state.windows.filter((window) => window.id !== windowId),
     activeWindowId: nextActiveWindowId(state.windows, windowId, state.activeWindowId),
+  };
+};
+
+/**
+ * ターミナルを別のウィンドウへ移す（RDD 19章、非破壊）。
+ *
+ * **取り除きと挿し込みを1回で行う。** 分けて呼ぶと、途中の状態が保存された場合に
+ * 同じセッションが2つのウィンドウに載る。次の読み込みで重複が「先のウィンドウ勝ち」で
+ * 解決されるため、移動先が配列の後ろにあると移動が黙って巻き戻る。
+ *
+ * 見ているウィンドウは切り替えない。移動先のフォーカスだけ動かしたターミナルに合わせ、
+ * そのウィンドウを開いたときに選ばれている状態にする。
+ */
+export const moveSessionToWindow = (
+  state: WindowsState,
+  sessionId: string,
+  targetWindowId: string,
+): WindowsState => {
+  const sourceWindowId = windowIdOfSession(state.windows, sessionId);
+  if (sourceWindowId === undefined || sourceWindowId === targetWindowId) return state;
+  if (findWindow(state.windows, targetWindowId) === undefined) return state;
+  return {
+    ...state,
+    windows: state.windows.map((window) => {
+      if (window.id === sourceWindowId) {
+        const layout = window.layout === null ? null : removeLeaf(window.layout, sessionId);
+        return {
+          ...window,
+          layout,
+          activeSessionId: resolveActiveSession(layout, window.activeSessionId),
+        };
+      }
+      if (window.id === targetWindowId) {
+        return {
+          ...window,
+          layout: appendLeafRight(window.layout, sessionId),
+          activeSessionId: sessionId,
+        };
+      }
+      return window;
+    }),
   };
 };
 

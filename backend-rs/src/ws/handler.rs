@@ -24,6 +24,7 @@ const TAG_REPLAY: u8 = 0x02;
 const TAG_STATUS: u8 = 0x03;
 const TAG_EXIT: u8 = 0x04;
 const TAG_ERROR: u8 = 0x05;
+const TAG_RESYNC: u8 = 0x06;
 
 // --- クライアント → サーバ ---
 const CLIENT_TAG_INPUT: u8 = 0x01;
@@ -115,20 +116,26 @@ async fn handle_socket(socket: WebSocket, session_id: String, manager: Arc<Sessi
     }
 
     // PTY出力 → クライアント（5ms窓でコアレッシング）
+    let resync_manager = Arc::clone(&manager);
+    let resync_session = session_id.clone();
     let mut receiver = subscription.receiver;
     let mut send_task = tokio::spawn(async move {
         loop {
+            // 取りこぼしたら、集めかけた分ごと捨ててリングバッファから送り直す（RDD.md 10.6章）
+            let mut lagged = false;
             let first = match receiver.recv().await {
-                Ok(event) => event,
-                // 受信が追いつかず取りこぼした場合も接続は維持し、次のフレームから再開する
-                Err(RecvError::Lagged(_)) => continue,
+                Ok(event) => Some(event),
+                Err(RecvError::Lagged(_)) => {
+                    lagged = true;
+                    None
+                }
                 Err(RecvError::Closed) => break,
             };
 
             let mut data = Vec::new();
             let mut trailing: Option<SessionEvent> = None;
             match first {
-                SessionEvent::Data(chunk) => {
+                Some(SessionEvent::Data(chunk)) => {
                     data.extend_from_slice(&chunk);
                     let window = tokio::time::sleep(COALESCE_WINDOW);
                     tokio::pin!(window);
@@ -138,13 +145,25 @@ async fn handle_socket(socket: WebSocket, session_id: String, manager: Arc<Sessi
                             event = receiver.recv() => match event {
                                 Ok(SessionEvent::Data(more)) => data.extend_from_slice(&more),
                                 Ok(other) => { trailing = Some(other); break; }
-                                Err(RecvError::Lagged(_)) => continue,
+                                Err(RecvError::Lagged(_)) => { lagged = true; break; }
                                 Err(RecvError::Closed) => break,
                             }
                         }
                     }
                 }
-                other => trailing = Some(other),
+                Some(other) => trailing = Some(other),
+                None => {}
+            }
+
+            if lagged {
+                // 取りこぼした分もリングバッファには入っている。画面ごと送り直させる
+                let Some(snapshot) = resync_manager.resync(&resync_session, &mut receiver) else {
+                    break;
+                };
+                if sink.send(frame(TAG_RESYNC, &snapshot)).await.is_err() {
+                    break;
+                }
+                continue;
             }
 
             if !data.is_empty() && sink.send(frame(TAG_DATA, &data)).await.is_err() {

@@ -21,6 +21,8 @@ export interface ApiEnvelope<T> {
 export type ServerMessage =
   | { readonly type: 'replay'; readonly data: Uint8Array }
   | { readonly type: 'data'; readonly data: Uint8Array }
+  /** 配信の取りこぼし後に送り直される画面。書き足さず、消してから書く（RDD 10.6章） */
+  | { readonly type: 'resync'; readonly data: Uint8Array }
   | { readonly type: 'status'; readonly status: SessionStatus }
   | { readonly type: 'exit'; readonly exitCode: number }
   | { readonly type: 'error'; readonly error: string };
@@ -39,6 +41,8 @@ export interface ProcessUsage {
   /** 1コアを100%として数えた合計。マシンが複数コアなら100を超えうる */
   readonly cpuPercent: number;
   readonly memoryBytes: number;
+  /** GPUエンジン使用率の合計（RDD 17.6章）。カウンタが無い環境では常に0 */
+  readonly gpuPercent: number;
 }
 
 /** RDD 17章: ターミナル1つぶんの使用量（シェルとその子孫の合計） */
@@ -46,6 +50,7 @@ export interface SessionUsage {
   readonly sessionId: string;
   readonly cpuPercent: number;
   readonly memoryBytes: number;
+  readonly gpuPercent: number;
 }
 
 /** RDD 17章: リソース使用量の一式 */
@@ -55,4 +60,6 @@ export interface MetricsSnapshot {
   readonly sessions: readonly SessionUsage[];
   /** 論理コア数。cpuPercent をマシン全体に対する割合へ直すのに使う */
   readonly cpuCount: number;
+  /** マシンの物理メモリ総量。memoryBytes を割合へ直すのに使う（RDD 17.6章） */
+  readonly totalMemoryBytes: number;
 }

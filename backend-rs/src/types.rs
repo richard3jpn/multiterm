@@ -37,6 +37,8 @@ pub struct ProcessUsage {
     /// 1コアを100%として数えた合計。マシンが複数コアなら100を超えうる
     pub cpu_percent: f32,
     pub memory_bytes: u64,
+    /// GPUエンジン使用率の合計（RDD.md 17.6章）。カウンタが無い環境では常に0
+    pub gpu_percent: f32,
 }
 
 /// RDD.md 17章: ターミナル1つぶんの使用量（シェルとその子孫の合計）
@@ -46,6 +48,7 @@ pub struct SessionUsage {
     pub session_id: String,
     pub cpu_percent: f32,
     pub memory_bytes: u64,
+    pub gpu_percent: f32,
 }
 
 /// RDD.md 17章: リソース使用量の一式
@@ -57,6 +60,8 @@ pub struct MetricsSnapshot {
     pub sessions: Vec<SessionUsage>,
     /// 論理コア数。`cpuPercent` をマシン全体に対する割合へ直すのに使う
     pub cpu_count: usize,
+    /// マシンの物理メモリ総量。`memoryBytes` を割合へ直すのに使う（RDD.md 17.6章）
+    pub total_memory_bytes: u64,
 }
 
 /// RDD.md 4章パターン準拠のAPIレスポンス envelope

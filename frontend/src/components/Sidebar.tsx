@@ -8,7 +8,12 @@ import {
 import type { PaneState } from '../features/status/pane-state';
 import { useSettings } from '../contexts/settings-context';
 import { sanitizeTitle } from '../features/session/title';
-import { formatCpuPercent, formatMemory } from '../features/metrics/format';
+import {
+  formatCpuPercent,
+  formatGpuPercent,
+  formatMemoryPercent,
+} from '../features/metrics/format';
+import { DRAG_MIME } from '../features/layout/layout-tree';
 import { renameSession } from '../services/api';
 import type { Session, SessionUsage } from '../types';
 
@@ -44,6 +49,8 @@ interface SidebarProps {
   readonly width: number;
   /** 論理コア数（RDD 17章）。各行のCPU使用率をマシン全体に対する割合へ直すのに使う */
   readonly cpuCount: number;
+  /** マシンの物理メモリ総量（RDD 17.6章）。各行のメモリ量を割合へ直すのに使う */
+  readonly totalMemoryBytes: number;
   readonly onSelect: (sessionId: string) => void;
   readonly onClose: (sessionId: string) => void;
   readonly onRenamed: (session: Session) => void;
@@ -51,6 +58,8 @@ interface SidebarProps {
   readonly onSelectWindow: (windowId: string) => void;
   readonly onCloseWindow: (windowId: string) => void;
   readonly onRenameWindow: (windowId: string, title: string) => void;
+  /** ペインをウィンドウ見出しへ落として別のウィンドウへ移す（RDD 19章） */
+  readonly onMoveToWindow: (sessionId: string, windowId: string) => void;
 }
 
 /**
@@ -67,6 +76,7 @@ export function Sidebar({
   activeSessionId,
   width,
   cpuCount,
+  totalMemoryBytes,
   onSelect,
   onClose,
   onRenamed,
@@ -74,6 +84,7 @@ export function Sidebar({
   onSelectWindow,
   onCloseWindow,
   onRenameWindow,
+  onMoveToWindow,
 }: SidebarProps) {
   const counts = countPaneStates(groups.flatMap((group) => group.items.map((item) => item.state)));
   const isEmpty = groups.every((group) => group.items.length === 0);
@@ -85,6 +96,8 @@ export function Sidebar({
   const [editingWindowId, setEditingWindowId] = useState<string | null>(null);
   const [draftTitle, setDraftTitle] = useState('');
   const [renameError, setRenameError] = useState(false);
+  // ペインのドラッグが乗っているウィンドウ見出し（RDD 19章）
+  const [dropWindowId, setDropWindowId] = useState<string | null>(null);
   const committingRef = useRef(false);
   // Escapeで閉じるとinputがDOMから外れてblurが走る。state更新は非同期で間に合わないため、
   // フラグでblur側の保存を止める
@@ -231,7 +244,8 @@ export function Sidebar({
                 {item.usage !== null && (
                   <span className="block truncate text-[0.77em] tabular-nums text-muted-foreground">
                     {formatCpuPercent(item.usage.cpuPercent, cpuCount)} ·{' '}
-                    {formatMemory(item.usage.memoryBytes)}
+                    {formatMemoryPercent(item.usage.memoryBytes, totalMemoryBytes)} ·{' '}
+                    {formatGpuPercent(item.usage.gpuPercent)}
                   </span>
                 )}
               </span>
@@ -255,7 +269,25 @@ export function Sidebar({
     <div
       className={`group flex items-center gap-2 rounded px-2 py-1 ${
         group.active ? 'bg-accent/60' : 'hover:bg-accent/30'
-      }`}
+      } ${dropWindowId === group.windowId ? 'ring-2 ring-primary' : ''}`}
+      onDragOver={(event) => {
+        // 非表示のウィンドウのペインはイベントを受け取れないので、見出しを落とし先にする
+        if (!event.dataTransfer?.types.includes(DRAG_MIME)) return;
+        event.preventDefault();
+        event.dataTransfer.dropEffect = 'move';
+        setDropWindowId(group.windowId);
+      }}
+      onDragLeave={(event) => {
+        if (event.currentTarget.contains(event.relatedTarget as Node | null)) return;
+        setDropWindowId(null);
+      }}
+      onDrop={(event) => {
+        setDropWindowId(null);
+        const dragged = event.dataTransfer?.getData(DRAG_MIME);
+        if (!dragged) return;
+        event.preventDefault();
+        onMoveToWindow(dragged, group.windowId);
+      }}
     >
       {editingWindowId === group.windowId ? (
         <div key="window-editor" className="flex min-w-0 flex-1 items-center gap-2">

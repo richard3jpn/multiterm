@@ -6,6 +6,7 @@ import {
   collectAllSessionIds,
   createWindow,
   findWindow,
+  moveSessionToWindow,
   nextActiveWindowId,
   nextWindowTitle,
   removeWindow,
@@ -16,6 +17,7 @@ import {
   windowIdOfSession,
 } from './window-model';
 import type { WindowsState } from './window-model';
+import { collectSessionIds } from '../layout/layout-tree';
 import type { LayoutNode } from '../layout/layout-tree';
 
 const leaf = (sessionId: string): LayoutNode => ({ type: 'leaf', sessionId });
@@ -167,5 +169,60 @@ describe('Alt+数字の序数（RDD 14.5章）', () => {
 
   it('ターミナルが1つも無ければ空', () => {
     expect(buildDigitOrdinals([createWindow('w1', 'Window 1', null)]).size).toBe(0);
+  });
+});
+
+describe('ウィンドウ間のターミナル移動（RDD 19章）', () => {
+  it('元のウィンドウから消えて、移動先の右側に現れる', () => {
+    const moved = moveSessionToWindow(state(), 'b', 'w2');
+    expect(collectSessionIds(findWindow(moved.windows, 'w1')!.layout!)).toEqual(['a']);
+    expect(collectSessionIds(findWindow(moved.windows, 'w2')!.layout!)).toEqual(['c', 'b']);
+  });
+
+  it('移動してもセッションの集合は変わらず、二重に載らない（排他所属）', () => {
+    const moved = moveSessionToWindow(state(), 'b', 'w2');
+    expect(collectAllSessionIds(moved.windows).sort()).toEqual(['a', 'b', 'c']);
+    expect(windowIdOfSession(moved.windows, 'b')).toBe('w2');
+  });
+
+  it('移動元のフォーカスは残った葉へ寄せ、移動先は動かしたターミナルにする', () => {
+    // w1 のフォーカスは 'a' なので動かない。'a' を動かした場合は 'b' へ寄る
+    const moved = moveSessionToWindow(state(), 'a', 'w2');
+    expect(findWindow(moved.windows, 'w1')!.activeSessionId).toBe('b');
+    expect(findWindow(moved.windows, 'w2')!.activeSessionId).toBe('a');
+  });
+
+  it('最後の1つを動かすと移動元は空になる（ウィンドウ自体は残す）', () => {
+    const moved = moveSessionToWindow(state(), 'c', 'w1');
+    const source = findWindow(moved.windows, 'w2')!;
+    expect(source.layout).toBeNull();
+    expect(source.activeSessionId).toBeNull();
+  });
+
+  it('見ているウィンドウは切り替えない', () => {
+    expect(moveSessionToWindow(state(), 'a', 'w2').activeWindowId).toBe('w1');
+  });
+
+  it('空のウィンドウへ移すと最初の葉になる', () => {
+    const withEmpty: WindowsState = {
+      windows: [createWindow('w1', 'Window 1', leaf('a'), 'a'), createWindow('w2', 'Window 2', null)],
+      activeWindowId: 'w1',
+    };
+    const moved = moveSessionToWindow(withEmpty, 'a', 'w2');
+    expect(findWindow(moved.windows, 'w2')!.layout).toEqual(leaf('a'));
+    expect(findWindow(moved.windows, 'w1')!.layout).toBeNull();
+  });
+
+  it('同じウィンドウ・知らないID は何もせず同じ状態を返す', () => {
+    const current = state();
+    expect(moveSessionToWindow(current, 'a', 'w1')).toBe(current);
+    expect(moveSessionToWindow(current, 'zzz', 'w2')).toBe(current);
+    expect(moveSessionToWindow(current, 'a', 'zzz')).toBe(current);
+  });
+
+  it('元の状態を書き換えない', () => {
+    const current = state();
+    moveSessionToWindow(current, 'b', 'w2');
+    expect(collectSessionIds(findWindow(current.windows, 'w1')!.layout!)).toEqual(['a', 'b']);
   });
 });

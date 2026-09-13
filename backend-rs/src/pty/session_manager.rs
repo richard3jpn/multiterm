@@ -5,6 +5,7 @@ use crate::types::{SessionInfo, SessionStatus, ShellInfo};
 use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::sync::{Arc, Mutex, Weak};
+use tokio::sync::broadcast::error::TryRecvError;
 use tokio::sync::{broadcast, Notify};
 
 /// PTY起動サイズの既定値（フロントの初回resizeで上書きされる）
@@ -239,6 +240,23 @@ impl SessionManager {
         Some(SessionSubscription { replay, status, receiver })
     }
 
+    /// 配信を取りこぼした購読者へ送り直す画面（RDD.md 10.6章）。
+    ///
+    /// バッファのロックを保持したまま受信キューを捨てる。spawn_reader は同じロックの
+    /// 内側で追記と配信を行うため、ロックを持っている間は新しい出力が割り込まない。
+    /// これでスナップショットに入っている分がキューにも残って二度書かれることがない。
+    pub fn resync(
+        &self,
+        id: &str,
+        receiver: &mut broadcast::Receiver<SessionEvent>,
+    ) -> Option<Vec<u8>> {
+        let sessions = self.sessions.lock().unwrap();
+        let session = sessions.get(id)?;
+        let buffer = session.buffer.lock().unwrap();
+        drain_pending(receiver);
+        Some(buffer.snapshot())
+    }
+
     pub fn dispose(&self, id: &str) -> Result<(), SessionError> {
         let session = self.sessions.lock().unwrap().remove(id).ok_or_else(|| not_found(id))?;
         let _ = session.pty.child.lock().unwrap().kill();
@@ -430,4 +448,56 @@ fn home_dir() -> Option<std::path::PathBuf> {
     std::env::var_os("USERPROFILE")
         .or_else(|| std::env::var_os("HOME"))
         .map(std::path::PathBuf::from)
+}
+
+/// 受信キューに残っている分をすべて捨てる（RDD.md 10.6章）。
+///
+/// 取りこぼしの後に呼ぶ。捨てる分もリングバッファには入っているため、
+/// スナップショットを送り直したあとにこれらを流すと同じ出力を二度書くことになる。
+fn drain_pending(receiver: &mut broadcast::Receiver<SessionEvent>) {
+    loop {
+        match receiver.try_recv() {
+            // 捨てている最中にさらに取りこぼしても、続けて捨て切る
+            Ok(_) | Err(TryRecvError::Lagged(_)) => continue,
+            Err(TryRecvError::Empty) | Err(TryRecvError::Closed) => break,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn data(byte: u8) -> SessionEvent {
+        SessionEvent::Data(Arc::new(vec![byte]))
+    }
+
+    #[test]
+    fn drain_pending_empties_the_queue() {
+        let (sender, mut receiver) = broadcast::channel(4);
+        sender.send(data(b'a')).unwrap();
+        sender.send(data(b'b')).unwrap();
+        drain_pending(&mut receiver);
+        assert!(matches!(receiver.try_recv(), Err(TryRecvError::Empty)));
+    }
+
+    #[test]
+    fn drain_pending_clears_lagged_queue() {
+        // 容量を超えて送ると購読者は Lagged になる。取りこぼしの後も捨て切れること
+        let (sender, mut receiver) = broadcast::channel(2);
+        for byte in b"abcd" {
+            sender.send(data(*byte)).unwrap();
+        }
+        drain_pending(&mut receiver);
+        assert!(matches!(receiver.try_recv(), Err(TryRecvError::Empty)));
+    }
+
+    #[test]
+    fn drain_pending_returns_when_sender_is_gone() {
+        let (sender, mut receiver) = broadcast::channel(2);
+        sender.send(data(b'a')).unwrap();
+        drop(sender);
+        drain_pending(&mut receiver);
+        assert!(matches!(receiver.try_recv(), Err(TryRecvError::Closed)));
+    }
 }

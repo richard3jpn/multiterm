@@ -29,6 +29,14 @@ describe('WebSocketサービス（バイナリプロトコル）', () => {
     }
   });
 
+  it('parseServerMessage: resync は生バイトのまま返す（取りこぼし後の画面再送）', () => {
+    const resync = parseServerMessage(frame(0x06, bytesOf('hello')));
+    expect(resync?.type).toBe('resync');
+    if (resync?.type === 'resync') {
+      expect(new TextDecoder().decode(resync.data)).toBe('hello');
+    }
+  });
+
   it('parseServerMessage: status は 0=running / 1=idle / 2=waiting-input', () => {
     expect(parseServerMessage(frame(0x03, [0]))).toEqual({ type: 'status', status: 'running' });
     expect(parseServerMessage(frame(0x03, [1]))).toEqual({ type: 'status', status: 'idle' });

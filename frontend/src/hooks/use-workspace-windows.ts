@@ -5,6 +5,7 @@ import {
   activeWindow,
   addWindow,
   createWindow,
+  moveSessionToWindow,
   nextWindowTitle,
   removeWindow,
   renameWindow,
@@ -111,8 +112,9 @@ export const useWorkspaceWindows = () => {
   /**
    * ドラッグ&ドロップでペインの配置を入れ替える（RDD 15章）。
    *
-   * 動かせるのは同じウィンドウの中だけ。ウィンドウをまたぐ移動は RDD 14.7 で
-   * スコープ外にしているため、所属が違うドロップは黙って無視する。
+   * ペインの上へ落とすこの経路は、同じウィンドウの中だけを動かす。
+   * 非表示のウィンドウのペインは display:none でイベントを受け取れないため、
+   * ウィンドウをまたぐ移動はサイドバーの見出しへ落とす経路で行う（RDD 19章）。
    */
   const moveSession = useCallback(
     (sessionId: string, targetSessionId: string, position: DropPosition) => {
@@ -132,6 +134,13 @@ export const useWorkspaceWindows = () => {
     },
     [],
   );
+
+  /** サイドバーのウィンドウ見出しへ落として、別のウィンドウへ移す（RDD 19章） */
+  const moveSessionToOtherWindow = useCallback((sessionId: string, targetWindowId: string) => {
+    setState((current) =>
+      current === null ? current : moveSessionToWindow(current, sessionId, targetWindowId),
+    );
+  }, []);
 
   const openWindow = useCallback(() => {
     setState((current) =>
@@ -167,6 +176,7 @@ export const useWorkspaceWindows = () => {
     removeSession,
     focusSession,
     moveSession,
+    moveSessionToOtherWindow,
     openWindow,
     closeWindow,
     switchWindow,

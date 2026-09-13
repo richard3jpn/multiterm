@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   collectSessionIds,
+  equalizeRatios,
   moveLeaf,
   pruneDeadLeaves,
   removeLeaf,
@@ -8,9 +9,16 @@ import {
   splitLeaf,
   updateRatio,
 } from './layout-tree';
-import type { LayoutNode } from './layout-tree';
+import type { LayoutNode, SplitDirection } from './layout-tree';
 
 const leaf = (sessionId: string): LayoutNode => ({ type: 'leaf', sessionId });
+
+const split = (
+  direction: SplitDirection,
+  ratio: number,
+  first: LayoutNode,
+  second: LayoutNode,
+): LayoutNode => ({ type: 'split', direction, ratio, first, second });
 
 describe('二分木レイアウト（RDD 7章）', () => {
   it('splitLeaf: 葉を分割ノードに置き換える（元の木は変更しない）', () => {
@@ -153,26 +161,100 @@ describe('ペインの移動（RDD 15章）', () => {
 });
 
 describe('落とす位置の判定（RDD 15章）', () => {
-  it('最も近い辺を選ぶ', () => {
+  it('左右の帯に入れば左右、外なら上半分か下半分', () => {
     expect(resolveDropPosition(100, 100, 5, 50)).toBe('left');
     expect(resolveDropPosition(100, 100, 95, 50)).toBe('right');
     expect(resolveDropPosition(100, 100, 50, 5)).toBe('top');
     expect(resolveDropPosition(100, 100, 50, 95)).toBe('bottom');
   });
 
-  it('幅と高さで正規化するので、横長のペインでも左右が選べる', () => {
-    // 幅400・高さ100。左から20px は 0.05、上から30px は 0.3 なので left
-    expect(resolveDropPosition(400, 100, 20, 30)).toBe('left');
-    // 左から100px は 0.25。上から20px の 0.2 のほうが近いので top
-    expect(resolveDropPosition(400, 100, 100, 20)).toBe('top');
+  it('上下に積まれた横長のペインでも、ヘッダーの高さで左右に落とせる', () => {
+    // 幅1100・高さ420 は上下2分割の典型。ヘッダーを掴んで運ぶと相手のヘッダー行
+    // （上端から14px程度）を通るが、そこでも左から100px は幅の0.09なので left。
+    // 4辺までの距離で決めていた頃は、この高さでは左から37px以内でないと left にならなかった
+    expect(resolveDropPosition(1100, 420, 100, 14)).toBe('left');
+    expect(resolveDropPosition(1100, 420, 1000, 14)).toBe('right');
   });
 
-  it('距離が並んだら left → right → top → bottom の順で決める', () => {
-    expect(resolveDropPosition(100, 100, 50, 50)).toBe('left');
+  it('帯の外は高さの半分で上下を分ける', () => {
+    // 左から25%ちょうどは帯の外（境界は帯に含めない）
+    expect(resolveDropPosition(400, 100, 100, 20)).toBe('top');
+    expect(resolveDropPosition(400, 100, 100, 80)).toBe('bottom');
+  });
+
+  it('ちょうど中央は bottom（結果を決定的にする）', () => {
+    expect(resolveDropPosition(100, 100, 50, 50)).toBe('bottom');
   });
 
   it('サイズが取れないときは right（0除算しない）', () => {
     expect(resolveDropPosition(0, 100, 0, 50)).toBe('right');
     expect(resolveDropPosition(100, 0, 50, 0)).toBe('right');
+  });
+});
+
+describe('幅・高さの均等化（RDD 18章）', () => {
+  it('2枚並びは半分ずつになる', () => {
+    const root = split('vertical', 0.8, leaf('a'), leaf('b'));
+    expect(equalizeRatios(root, 'vertical')).toEqual(
+      split('vertical', 0.5, leaf('a'), leaf('b')),
+    );
+  });
+
+  it('同じ向きが入れ子でも、葉の数で割って全部同じ大きさにする', () => {
+    // 左に1枚、右がさらに2枚に割れている。単純に全部0.5にすると 50% / 25% / 25% になる
+    const root = split('vertical', 0.8, leaf('a'), split('vertical', 0.2, leaf('b'), leaf('c')));
+    const equalized = equalizeRatios(root, 'vertical');
+    expect(equalized).toEqual(
+      split('vertical', 1 / 3, leaf('a'), split('vertical', 0.5, leaf('b'), leaf('c'))),
+    );
+  });
+
+  it('向きが違うノードの比率は動かさない', () => {
+    // 左右の均等化では、上下の分かれ方に触らない
+    const inner = split('horizontal', 0.8, leaf('b'), leaf('c'));
+    const root = split('vertical', 0.2, leaf('a'), inner);
+    expect(equalizeRatios(root, 'vertical')).toEqual(split('vertical', 0.5, leaf('a'), inner));
+  });
+
+  it('入れ子の奥にある同じ向きも均等化する', () => {
+    const root = split('horizontal', 0.5, leaf('a'), split('vertical', 0.9, leaf('b'), leaf('c')));
+    expect(equalizeRatios(root, 'vertical')).toEqual(
+      split('horizontal', 0.5, leaf('a'), split('vertical', 0.5, leaf('b'), leaf('c'))),
+    );
+  });
+
+  it('元の木は変更しない', () => {
+    const root = split('vertical', 0.8, leaf('a'), leaf('b'));
+    equalizeRatios(root, 'vertical');
+    expect(root).toEqual(split('vertical', 0.8, leaf('a'), leaf('b')));
+  });
+
+  it('変える比率が無ければ同じ木をそのまま返す', () => {
+    const alreadyEven = split('vertical', 0.5, leaf('a'), leaf('b'));
+    expect(equalizeRatios(alreadyEven, 'vertical')).toBe(alreadyEven);
+    // 向きが違えば触るものが無い
+    expect(equalizeRatios(alreadyEven, 'horizontal')).toBe(alreadyEven);
+    const single = leaf('a');
+    expect(equalizeRatios(single, 'vertical')).toBe(single);
+  });
+
+  it('同じ向きに並びすぎたら下限でクランプする（比率は0と1を取らない）', () => {
+    // 11枚を左右に並べると 1/11 = 0.0909… で下限0.1を下回る。
+    // 0を許すとレイアウトの読み込み時に丸ごと捨てられるため、下限で止める
+    let root: LayoutNode = leaf('s0');
+    for (let index = 1; index < 11; index += 1) {
+      root = split('vertical', 0.5, root, leaf(`s${index}`));
+    }
+    const equalized = equalizeRatios(root, 'vertical');
+    const ratios: number[] = [];
+    const walk = (node: LayoutNode): void => {
+      if (node.type !== 'split') return;
+      ratios.push(node.ratio);
+      walk(node.first);
+      walk(node.second);
+    };
+    walk(equalized);
+    expect(ratios.every((ratio) => ratio > 0 && ratio < 1)).toBe(true);
+    expect(Math.min(...ratios)).toBeGreaterThanOrEqual(0.1);
   });
 });

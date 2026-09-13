@@ -1,5 +1,14 @@
 import { describe, expect, it } from 'vitest';
-import { formatCpuPercent, formatMemory, toMachineCpuPercent } from './format';
+import {
+  formatCpuPercent,
+  formatGpuPercent,
+  formatMemory,
+  formatMemoryPercent,
+  toMachineCpuPercent,
+  toMemoryPercent,
+} from './format';
+
+const GB = 1024 * 1024 * 1024;
 
 describe('CPU使用率の換算（RDD 17章）', () => {
   it('コア数で割ってマシン全体に対する割合にする', () => {
@@ -37,5 +46,33 @@ describe('メモリ量の表示（RDD 17章）', () => {
 
   it('負の値は0扱いにする（計測が壊れても表示を壊さない）', () => {
     expect(formatMemory(-1)).toBe('0 KB');
+  });
+});
+
+describe('メモリ使用率（RDD 17.6章）', () => {
+  it('マシンの総量に対する割合にする', () => {
+    expect(toMemoryPercent(8 * GB, 32 * GB)).toBeCloseTo(25);
+    expect(toMemoryPercent(32 * GB, 32 * GB)).toBeCloseTo(100);
+  });
+
+  it('総量が取れないときは0にする（0除算しない）', () => {
+    expect(toMemoryPercent(100, 0)).toBe(0);
+    expect(toMemoryPercent(100, -1)).toBe(0);
+  });
+
+  it('CPUと同じく小数1桁まで見せる', () => {
+    expect(formatMemoryPercent(8 * GB, 32 * GB)).toBe('25.0%');
+    expect(formatMemoryPercent(0, 32 * GB)).toBe('0.0%');
+  });
+});
+
+describe('GPU使用率（RDD 17.6章）', () => {
+  it('バックエンドが割合で返すのでそのまま小数1桁で出す', () => {
+    expect(formatGpuPercent(6.234)).toBe('6.2%');
+    expect(formatGpuPercent(0)).toBe('0.0%');
+  });
+
+  it('負の値は0扱いにする', () => {
+    expect(formatGpuPercent(-1)).toBe('0.0%');
   });
 });

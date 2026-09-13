@@ -24,6 +24,27 @@ export const formatCpuPercent = (cpuPercent: number, cpuCount: number): string =
   `${toMachineCpuPercent(cpuPercent, cpuCount).toFixed(1)}%`;
 
 /**
+ * メモリ量をマシンの総量に対する割合へ直す（RDD 17.6章）。
+ * 総量が取れない環境でも表示を壊さないよう、0以下なら0を返す。
+ */
+export const toMemoryPercent = (memoryBytes: number, totalMemoryBytes: number): number =>
+  totalMemoryBytes <= 0 ? 0 : (memoryBytes / totalMemoryBytes) * 100;
+
+/** 画面に出すメモリ使用率。CPUと桁を揃える */
+export const formatMemoryPercent = (memoryBytes: number, totalMemoryBytes: number): string =>
+  `${toMemoryPercent(memoryBytes, totalMemoryBytes).toFixed(1)}%`;
+
+/**
+ * 画面に出すGPU使用率（RDD 17.6章）。
+ *
+ * バックエンドはエンジン（3D・コピー・デコード等）ごとの割合を足して返す。
+ * すでに割合なのでコア数のような換算は要らない。複数のエンジンを同時に使うと
+ * 100を超えることがあるが、丸めずそのまま出す。
+ */
+export const formatGpuPercent = (gpuPercent: number): string =>
+  `${Math.max(0, gpuPercent).toFixed(1)}%`;
+
+/**
  * 画面に出すメモリ量。
  *
  * 桁が変わっても幅が暴れないよう、MBまでは整数、GBからは小数1桁にする。

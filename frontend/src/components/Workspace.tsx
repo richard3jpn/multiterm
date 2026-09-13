@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'preact/hooks';
 import type { JSX } from 'preact';
-import { Moon, PanelLeft, Sun, TerminalSquare } from './icons';
+import { Columns3, Moon, PanelLeft, Rows3, Sun, TerminalSquare } from './icons';
 import { Button } from './primitives/Button';
 import { NewTerminalButton } from './NewTerminalButton';
 import { SettingsPanel } from './SettingsPanel';
@@ -23,7 +23,12 @@ import {
 } from '../features/status/pane-state';
 import { useSettings } from '../contexts/settings-context';
 import { useTheme } from '../contexts/theme-context';
-import { collectSessionIds, splitLeaf, updateRatio } from '../features/layout/layout-tree';
+import {
+  collectSessionIds,
+  equalizeRatios,
+  splitLeaf,
+  updateRatio,
+} from '../features/layout/layout-tree';
 import type { SplitDirection, SplitPath } from '../features/layout/layout-tree';
 import { useWorkspaceWindows } from '../hooks/use-workspace-windows';
 import { summarizeWindowClose, windowCloseMessage } from '../features/window/close-window';
@@ -37,7 +42,12 @@ import {
 } from '../features/sidebar/sidebar-state';
 import type { SidebarState } from '../features/sidebar/sidebar-state';
 import { resolveShellLabel } from '../features/settings/shell-label';
-import { formatCpuPercent, formatMemory } from '../features/metrics/format';
+import {
+  formatCpuPercent,
+  formatGpuPercent,
+  formatMemory,
+  formatMemoryPercent,
+} from '../features/metrics/format';
 import {
   createSession,
   deleteSession,
@@ -89,6 +99,7 @@ export function Workspace() {
     removeSession,
     focusSession,
     moveSession,
+    moveSessionToOtherWindow,
     openWindow,
     closeWindow,
     switchWindow,
@@ -362,6 +373,16 @@ export function Workspace() {
     [updateActiveLayout],
   );
 
+  // 表示中のウィンドウの、指定した向きの分割を同じ大きさに揃える（RDD 18章）
+  const handleEqualize = useCallback(
+    (direction: SplitDirection) => {
+      updateActiveLayout((current) =>
+        current === null ? null : equalizeRatios(current, direction),
+      );
+    },
+    [updateActiveLayout],
+  );
+
   // サイドバー右端のドラッグで幅を変更する（SplitPane の境界線と同じ方式）
   const handleSidebarPointerDown = useCallback(
     (event: JSX.TargetedPointerEvent<HTMLDivElement>) => {
@@ -456,10 +477,12 @@ export function Workspace() {
           {metrics !== null && (
             <span
               className="whitespace-nowrap text-xs tabular-nums text-muted-foreground"
-              title={`MultiTerm 全体（バックエンドと全ターミナル）の使用量。CPUは${metrics.cpuCount}コアに対する割合`}
+              title={`MultiTerm 全体（バックエンドと全ターミナル）の使用量。CPUは${metrics.cpuCount}コア、メモリはマシンの総量に対する割合`}
             >
-              CPU {formatCpuPercent(metrics.app.cpuPercent, metrics.cpuCount)} ·{' '}
-              {formatMemory(metrics.app.memoryBytes)}
+              CPU {formatCpuPercent(metrics.app.cpuPercent, metrics.cpuCount)} · MEM{' '}
+              {formatMemoryPercent(metrics.app.memoryBytes, metrics.totalMemoryBytes)}（
+              {formatMemory(metrics.app.memoryBytes)}） · GPU{' '}
+              {formatGpuPercent(metrics.app.gpuPercent)}
             </span>
           )}
           {overallState !== 'idle' && (
@@ -486,6 +509,24 @@ export function Workspace() {
             defaultShellId={settings.defaultShellId}
             onCreate={handleCreate}
           />
+          <Button
+            variant="outline"
+            size="icon"
+            onClick={() => handleEqualize('vertical')}
+            title="左右の幅を揃える"
+            aria-label="左右の幅を揃える"
+          >
+            <Columns3 />
+          </Button>
+          <Button
+            variant="outline"
+            size="icon"
+            onClick={() => handleEqualize('horizontal')}
+            title="上下の高さを揃える"
+            aria-label="上下の高さを揃える"
+          >
+            <Rows3 />
+          </Button>
           <SettingsPanel />
           <Button
             variant="outline"
@@ -514,6 +555,7 @@ export function Workspace() {
               activeSessionId={activeSessionId}
               width={sidebar.width}
               cpuCount={metrics?.cpuCount ?? 1}
+              totalMemoryBytes={metrics?.totalMemoryBytes ?? 0}
               onSelect={focusSession}
               onClose={handleClose}
               onRenamed={handleRenamed}
@@ -521,6 +563,7 @@ export function Workspace() {
               onSelectWindow={switchWindow}
               onCloseWindow={handleCloseWindow}
               onRenameWindow={renameWindowTitle}
+              onMoveToWindow={moveSessionToOtherWindow}
             />
             <div
               role="separator"

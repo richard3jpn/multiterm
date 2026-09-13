@@ -19,7 +19,7 @@ import {
 } from '../features/status/status-style';
 import { renameSession } from '../services/api';
 import { buildWsUrl, inputMessage, parseServerMessage, resizeMessage } from '../services/ws';
-import { resolveDropPosition } from '../features/layout/layout-tree';
+import { DRAG_MIME, resolveDropPosition } from '../features/layout/layout-tree';
 import type { Session, SessionStatus, ShellInfo } from '../types';
 import type { DropPosition, SplitDirection } from '../features/layout/layout-tree';
 
@@ -54,15 +54,6 @@ interface TerminalPanelProps {
   readonly onMove: (sessionId: string, targetSessionId: string, position: DropPosition) => void;
 }
 
-/**
- * ドラッグ中のペインを運ぶ独自MIME（RDD 15章）。
- *
- * `text/plain` にするとエディタやブラウザから流れてきた文字列も受け取ってしまう。
- * 独自の型にしておけば、`dragover` の時点で `dataTransfer.types` を見るだけで
- * 自分たちのドラッグかどうか判別できる（`getData` は drop まで読めない）。
- */
-const DRAG_MIME = 'application/x-multiterm-session';
-
 /** 落とす位置のハイライト。落とした後にペインが占める側を半分だけ塗る */
 const DROP_OVERLAY: Readonly<Record<DropPosition, string>> = {
   left: 'inset-y-0 left-0 w-1/2',
@@ -70,6 +61,20 @@ const DROP_OVERLAY: Readonly<Record<DropPosition, string>> = {
   top: 'inset-x-0 top-0 h-1/2',
   bottom: 'inset-x-0 bottom-0 h-1/2',
 };
+
+/**
+ * ConPTY を使っていることを xterm へ伝えるオプション（RDD 10.7章）。
+ *
+ * ConPTY は行が増えたときに自分の見え方で画面を描き直し、一度 scrollback へ入った行は
+ * そこに残したままにする。これを伝えないと xterm は行が増えるたびに scrollback から
+ * 行を引き戻し、ConPTY の描き直しと重なって表示が崩れる。
+ *
+ * `buildNumber` は reflow を切るかどうかの判定にしか使われず、21376 以上では
+ * 指定の有無で結果が変わらない（@xterm/xterm の Buffer.ts）。OS判定を増やさないため渡さない。
+ */
+const WINDOWS_PTY_OPTION = navigator.userAgent.includes('Windows')
+  ? { windowsPty: { backend: 'conpty' as const } }
+  : {};
 
 /**
  * ANSI 16色。Windows Terminal の既定スキーム「Campbell」に合わせる。
@@ -149,6 +154,7 @@ export function TerminalPanel({
       fontSize: settings.fontSize,
       fontFamily: resolveFontFamily(settings.fontFamilyId),
       theme: XTERM_THEMES[theme === 'light' ? 'light' : 'dark'],
+      ...WINDOWS_PTY_OPTION,
     });
     termRef.current = term;
     const fit = new FitAddon();
@@ -195,6 +201,12 @@ export function TerminalPanel({
       switch (message.type) {
         case 'replay':
         case 'data':
+          term.write(message.data);
+          break;
+        case 'resync':
+          // 配信の取りこぼし後にサーバが送り直した画面（RDD 10.6章）。
+          // 取りこぼした分もこの中に入っているので、書き足すと二重になる。消してから書く
+          term.reset();
           term.write(message.data);
           break;
         case 'status':

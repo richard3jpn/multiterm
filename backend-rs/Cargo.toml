@@ -23,5 +23,10 @@ sysinfo = { version = "0.39", default-features = false, features = ["system"] }
 rust-embed = "8"
 mime_guess = "2"
 
+# GPU使用率（RDD 17.6章）。PDHのカウンタを読むためだけに使う。
+# sysinfo はGPUを扱わず、内蔵GPUではベンダー固有ツールも使えないため、OSのカウンタを読む
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.62", features = ["Win32_System_Performance"] }
+
 # リリースビルドの設定はワークスペースルートの Cargo.toml にある
 # （workspace ではメンバー側の [profile] が無視されるため）
