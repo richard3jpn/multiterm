@@ -352,10 +352,13 @@
       "allow": [
         "README.md",
         "BUILDLOG.md",
-        "NEXTSTEP.md"
+        "NEXTSTEP.md",
+        "scripts/",
+        "frontend/public/",
+        "frontend/index.html",
+        "frontend/src/components/TerminalPanel.tsx"
       ],
       "block": [
-        "frontend/",
         "backend/",
         "terraform/",
         "RDD.md"
