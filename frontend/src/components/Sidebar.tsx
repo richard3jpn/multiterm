@@ -243,9 +243,9 @@ export function Sidebar({
                 {/* 重いターミナルを名指しできるようにする（RDD 17章） */}
                 {item.usage !== null && (
                   <span className="block truncate text-[0.77em] tabular-nums text-muted-foreground">
-                    {formatCpuPercent(item.usage.cpuPercent, cpuCount)} ·{' '}
-                    {formatMemoryPercent(item.usage.memoryBytes, totalMemoryBytes)} ·{' '}
-                    {formatGpuPercent(item.usage.gpuPercent)}
+                    C:{formatCpuPercent(item.usage.cpuPercent, cpuCount)}{' '}
+                    M:{formatMemoryPercent(item.usage.memoryBytes, totalMemoryBytes)}{' '}
+                    G:{formatGpuPercent(item.usage.gpuPercent)}
                   </span>
                 )}
               </span>
