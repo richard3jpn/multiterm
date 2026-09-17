@@ -169,11 +169,6 @@ export function TerminalPanel({
     } catch {
       // フォールバック: xterm標準レンダラのまま継続
     }
-    // 代替画面バッファ（Claude Code等のTUI）ではホイールをPTYへ転送しない。
-    // 転送するとTUI側がホイールスクロールを自前処理して再描画し、
-    // バッジ（例: Jump to bottom）が本文行へ上書きされて表示が崩れる。
-    // 代替画面ではxterm自身のスクロールバックも存在しないため、抑止しても失う機能はない。
-    term.attachCustomWheelEventHandler(() => term.buffer.active.type !== 'alternate');
     fit.fit();
 
     // Ctrl+V はブラウザのペースト（xtermのpasteハンドラ→ブラケットペースト）に任せる。
