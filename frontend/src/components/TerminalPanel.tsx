@@ -19,6 +19,7 @@ import {
 } from '../features/status/status-style';
 import { renameSession } from '../services/api';
 import { buildWsUrl, inputMessage, parseServerMessage, resizeMessage } from '../services/ws';
+import { copyText } from '../features/clipboard/copy-text';
 import { DRAG_MIME, resolveDropPosition } from '../features/layout/layout-tree';
 import type { Session, SessionStatus, ShellInfo } from '../types';
 import type { DropPosition, SplitDirection } from '../features/layout/layout-tree';
@@ -171,21 +172,22 @@ export function TerminalPanel({
     }
     fit.fit();
 
-    // Ctrl+V はブラウザのペースト（xtermのpasteハンドラ→ブラケットペースト）に任せる。
-    // xtermに処理させると Ctrl+Vの制御文字 が送られるだけで、Claude Code等のTUIはこれを無視する。
-    // falseを返すとxtermはこのキーを扱わずpreventDefaultもしないため、
-    // ネイティブのpasteイベントが発火する（Windows Terminal と同じ挙動）。
     term.attachCustomKeyEventHandler((event) => {
-      if (
-        event.type === 'keydown' &&
-        event.ctrlKey &&
-        !event.altKey &&
-        !event.metaKey &&
-        !event.shiftKey &&
-        event.key === 'v'
-      ) {
+      if (event.type !== 'keydown' || !event.ctrlKey || event.altKey || event.metaKey) return true;
+      const key = event.key.toLowerCase();
+      // 選択しているときの Ctrl+C と、Ctrl+Shift+C はコピーにする（Windows Terminal と同じ作法）。
+      // 選択が無いときの Ctrl+C は従来どおり ^C を送って、実行中のコマンドを止める。
+      if (key === 'c' && term.hasSelection()) {
+        // 押した側で処理を終える。preventDefault しないとブラウザのcopyも重ねて走る
+        event.preventDefault();
+        void copyText(term.getSelection());
         return false;
       }
+      // Ctrl+V はブラウザのペースト（xtermのpasteハンドラ→ブラケットペースト）に任せる。
+      // xtermに処理させると Ctrl+Vの制御文字 が送られるだけで、Claude Code等のTUIはこれを無視する。
+      // falseを返すとxtermはこのキーを扱わずpreventDefaultもしないため、
+      // ネイティブのpasteイベントが発火する（Windows Terminal と同じ挙動）。
+      if (key === 'v' && !event.shiftKey) return false;
       return true;
     });
 

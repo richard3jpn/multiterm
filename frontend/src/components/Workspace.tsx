@@ -471,6 +471,10 @@ export function Workspace() {
         >
           <TerminalSquare className="size-5 shrink-0 text-primary" />
           <h1 className="shrink-0 text-sm font-semibold">MultiTerm</h1>
+          {/* どのビルドを見ているか分かるようにする。上げ方は README を参照 */}
+          <span className="shrink-0 text-xs tabular-nums text-muted-foreground">
+            v{__APP_VERSION__}
+          </span>
           <span className="shrink-0 text-xs text-muted-foreground">
             {sessions.length} セッション（上限16）
           </span>
