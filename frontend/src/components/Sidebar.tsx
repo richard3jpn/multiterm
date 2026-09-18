@@ -180,9 +180,16 @@ export function Sidebar({
     return (
       <li key={item.sessionId}>
         <div
+          // 見出しへ落として別ウィンドウへ移す（RDD 19章）。
+          // 名前を編集している間はドラッグさせない（TerminalPanelのヘッダと同じ扱い）
+          draggable={editingId !== item.sessionId}
+          onDragStart={(event) => {
+            event.dataTransfer?.setData(DRAG_MIME, item.sessionId);
+            if (event.dataTransfer) event.dataTransfer.effectAllowed = 'move';
+          }}
           className={`group flex items-center gap-2 rounded px-2 py-1.5 ${
             active ? 'bg-accent text-accent-foreground' : 'hover:bg-accent/50'
-          }`}
+          } ${editingId === item.sessionId ? '' : 'cursor-grab active:cursor-grabbing'}`}
         >
           {/* keyを分けないと、Preactが編集UIと通常UIの子要素を再利用して壊す */}
           {editingId === item.sessionId ? (
@@ -219,7 +226,7 @@ export function Sidebar({
               key="row"
               type="button"
               className="flex min-w-0 flex-1 items-center gap-2 text-left"
-              title={`${item.title}（${item.shellLabel}） — ${paneStateLabel(item.state)}／ダブルクリックで名前を変更`}
+              title={`${item.title}（${item.shellLabel}） — ${paneStateLabel(item.state)}／ダブルクリックで名前を変更／ドラッグしてウィンドウへ移動`}
               aria-current={active ? 'true' : undefined}
               onClick={() => onSelect(item.sessionId)}
               // mousedownで開くと後続のmouseup/clickが元のボタン位置に届いて
