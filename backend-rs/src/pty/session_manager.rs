@@ -411,6 +411,12 @@ fn spawn_pty(
     // 親プロセスが NO_COLOR を設定していると、その値を継承したアプリが色出力をやめてしまう。
     // ターミナルとして起動する以上、色は出せる前提にする（https://no-color.org/）
     command.env_remove("NO_COLOR");
+    // MultiTerm 自身を起動するための設定（PowerShell の mt 関数が設定する）のうち、
+    // 値が既定と同じで持ち込む利点がないものは、ここで開くシェルへ渡さない。
+    // PORT を継承すると、PORT を読む別のアプリが MultiTerm のポートで起動しようとして失敗する。
+    // ALLOWED_ORIGINS は既定値がなく開発モード起動に必要なので、あえて残す。
+    command.env_remove("PORT");
+    command.env_remove("HOST");
     if let Some(home) = home_dir() {
         command.cwd(home);
     }
