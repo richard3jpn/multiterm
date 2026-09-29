@@ -13,18 +13,24 @@ import type { PaneState } from './pane-state';
 
 describe('ペイン状態の決定（herdr の状態モデルを踏襲）', () => {
   it('入力待ちは未確認かどうかに関係なく blocked', () => {
-    expect(resolvePaneState('waiting-input', true)).toBe('blocked');
-    expect(resolvePaneState('waiting-input', false)).toBe('blocked');
+    expect(resolvePaneState('waiting-input', true, true)).toBe('blocked');
+    expect(resolvePaneState('waiting-input', false, true)).toBe('blocked');
   });
 
   it('実行中は未確認かどうかに関係なく working', () => {
-    expect(resolvePaneState('running', true)).toBe('working');
-    expect(resolvePaneState('running', false)).toBe('working');
+    expect(resolvePaneState('running', true, true)).toBe('working');
+    expect(resolvePaneState('running', false, true)).toBe('working');
   });
 
   it('idle は未確認なら done、確認済みなら idle', () => {
-    expect(resolvePaneState('idle', true)).toBe('done');
-    expect(resolvePaneState('idle', false)).toBe('idle');
+    expect(resolvePaneState('idle', true, true)).toBe('done');
+    expect(resolvePaneState('idle', false, true)).toBe('idle');
+  });
+
+  it('AI エージェントがいないターミナルは状態に関係なく none', () => {
+    expect(resolvePaneState('waiting-input', false, false)).toBe('none');
+    expect(resolvePaneState('running', false, false)).toBe('none');
+    expect(resolvePaneState('idle', true, false)).toBe('none');
   });
 });
 
@@ -45,19 +51,27 @@ describe('状態の集約（1つでも注意が必要なら全体をそう見せ
     expect(aggregatePaneState(['idle', 'idle'])).toBe('idle');
   });
 
-  it('ペインが無い場合は idle', () => {
-    expect(aggregatePaneState([])).toBe('idle');
+  it('none は idle より弱い', () => {
+    expect(aggregatePaneState(['none', 'idle', 'none'])).toBe('idle');
+  });
+
+  it('すべて none なら none', () => {
+    expect(aggregatePaneState(['none', 'none'])).toBe('none');
+  });
+
+  it('ペインが無い場合は none', () => {
+    expect(aggregatePaneState([])).toBe('none');
   });
 });
 
 describe('状態の集計', () => {
   it('各状態の件数を数える', () => {
     const states: PaneState[] = ['blocked', 'working', 'working', 'done', 'idle', 'idle', 'idle'];
-    expect(countPaneStates(states)).toEqual({ blocked: 1, working: 2, done: 1, idle: 3 });
+    expect(countPaneStates(states)).toEqual({ blocked: 1, working: 2, done: 1, idle: 3, none: 0 });
   });
 
   it('空なら全て0', () => {
-    expect(countPaneStates([])).toEqual({ blocked: 0, working: 0, done: 0, idle: 0 });
+    expect(countPaneStates([])).toEqual({ blocked: 0, working: 0, done: 0, idle: 0, none: 0 });
   });
 });
 
@@ -81,11 +95,18 @@ describe('表示', () => {
     expect(paneFrameClasses('working')).toBe('');
   });
 
+  it('AI エージェントがいないターミナルは色を付けない', () => {
+    expect(paneDotClasses('none')).toBe('bg-gray-500');
+    expect(paneFrameClasses('none')).toBe('');
+  });
+
   it('日本語ラベル', () => {
     expect(paneStateLabel('blocked')).toBe('入力待ち');
     expect(paneStateLabel('working')).toBe('実行中');
     expect(paneStateLabel('done')).toBe('完了（未確認）');
     expect(paneStateLabel('idle')).toBe('待機');
+    // AI がいないときは状態を出さない
+    expect(paneStateLabel('none')).toBe('');
   });
 });
 

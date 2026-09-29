@@ -65,12 +65,14 @@ impl MetricsCollector {
         let sessions = session_pids
             .iter()
             .map(|(session_id, pid)| {
-                let usage = sum_forest(&system, &children, &[Pid::from_u32(*pid)], &gpu_by_pid);
+                let root = Pid::from_u32(*pid);
+                let usage = sum_forest(&system, &children, &[root], &gpu_by_pid);
                 SessionUsage {
                     session_id: session_id.clone(),
                     cpu_percent: usage.cpu_percent,
                     memory_bytes: usage.memory_bytes,
                     gpu_percent: usage.gpu_percent,
+                    agent: has_agent_process(&system, &children, root),
                 }
             })
             .collect();
@@ -136,4 +138,48 @@ fn sum_forest(
     }
 
     ProcessUsage { cpu_percent, memory_bytes, gpu_percent }
+}
+
+/// 根から辿れるプロセスに AI エージェントがいるか（RDD.md 12.7章）
+fn has_agent_process(system: &System, children: &ChildrenMap, root: Pid) -> bool {
+    let mut seen: HashSet<Pid> = HashSet::new();
+    let mut stack = vec![root];
+    while let Some(pid) = stack.pop() {
+        if !seen.insert(pid) {
+            continue;
+        }
+        if let Some(process) = system.process(pid) {
+            if is_agent_process_name(&process.name().to_string_lossy()) {
+                return true;
+            }
+        }
+        if let Some(kids) = children.get(&pid) {
+            stack.extend(kids);
+        }
+    }
+    false
+}
+
+/// プロセス名が Claude Code か。Windows は `claude.exe`、それ以外は `claude`
+fn is_agent_process_name(name: &str) -> bool {
+    name.eq_ignore_ascii_case("claude") || name.eq_ignore_ascii_case("claude.exe")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn agent_process_name_matches_claude() {
+        for name in ["claude.exe", "Claude.EXE", "claude"] {
+            assert!(is_agent_process_name(name), "name={name}");
+        }
+    }
+
+    #[test]
+    fn agent_process_name_ignores_others() {
+        for name in ["powershell.exe", "node.exe", "claude-helper.exe", "myclaude", ""] {
+            assert!(!is_agent_process_name(name), "name={name}");
+        }
+    }
 }

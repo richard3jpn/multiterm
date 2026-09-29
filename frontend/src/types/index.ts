@@ -51,6 +51,8 @@ export interface SessionUsage {
   readonly cpuPercent: number;
   readonly memoryBytes: number;
   readonly gpuPercent: number;
+  /** ツリーに AI エージェント（Claude Code）がいるか。いなければ状態色を出さない（RDD 12.7章） */
+  readonly agent: boolean;
 }
 
 /** RDD 17章: リソース使用量の一式 */

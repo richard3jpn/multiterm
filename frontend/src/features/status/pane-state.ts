@@ -9,39 +9,46 @@ import type { SessionStatus } from '../../types';
  * - working: 実行中
  * - done:    完了したがユーザーがまだそのペインを見ていない
  * - idle:    完了済みで確認済み、または最初から待機
+ * - none:    AI エージェント（Claude Code）が動いていない。状態色を出さない（RDD 12.7章）
  */
-export type PaneState = 'blocked' | 'working' | 'done' | 'idle';
+export type PaneState = 'blocked' | 'working' | 'done' | 'idle' | 'none';
 
-export const PANE_STATES: readonly PaneState[] = ['blocked', 'working', 'done', 'idle'];
+export const PANE_STATES: readonly PaneState[] = ['blocked', 'working', 'done', 'idle', 'none'];
 
 /**
  * セッション状態と「未確認か」からペイン状態を決める。
  *
+ * AI エージェントがいなければ状態に関係なく none（普通のシェルまで色が付くとうるさいため）。
  * done は idle のときだけ意味を持つ（実行中・入力待ちは未確認かどうかに関係なくそちらが優先）。
  */
-export const resolvePaneState = (status: SessionStatus, unseen: boolean): PaneState => {
+export const resolvePaneState = (
+  status: SessionStatus,
+  unseen: boolean,
+  hasAgent: boolean,
+): PaneState => {
+  if (!hasAgent) return 'none';
   if (status === 'waiting-input') return 'blocked';
   if (status === 'running') return 'working';
   return unseen ? 'done' : 'idle';
 };
 
 /** 注意を引く順（人が対応すべき順）。集約時に最も強い状態を選ぶために使う */
-const SEVERITY: Record<PaneState, number> = { blocked: 3, working: 2, done: 1, idle: 0 };
+const SEVERITY: Record<PaneState, number> = { blocked: 3, working: 2, done: 1, idle: 0, none: -1 };
 
 /**
  * 複数ペインの状態を1つに集約する（herdr: ワークスペースは内部の状態を集約して表示する）。
- * ペインが無い場合は idle。
+ * ペインが無い場合は none。
  */
 export const aggregatePaneState = (states: readonly PaneState[]): PaneState =>
   states.reduce<PaneState>(
     (strongest, state) => (SEVERITY[state] > SEVERITY[strongest] ? state : strongest),
-    'idle',
+    'none',
   );
 
 export type PaneStateCounts = Readonly<Record<PaneState, number>>;
 
 export const countPaneStates = (states: readonly PaneState[]): PaneStateCounts => {
-  const counts: Record<PaneState, number> = { blocked: 0, working: 0, done: 0, idle: 0 };
+  const counts: Record<PaneState, number> = { blocked: 0, working: 0, done: 0, idle: 0, none: 0 };
   for (const state of states) counts[state] += 1;
   return counts;
 };
@@ -60,6 +67,8 @@ export const paneDotClasses = (state: PaneState): string => {
       return 'bg-orange-300';
     case 'idle':
       return 'bg-orange-300';
+    case 'none':
+      return 'bg-gray-500';
   }
 };
 
@@ -82,6 +91,7 @@ export const paneFrameClasses = (state: PaneState): string => {
     case 'idle':
       return 'shadow-[inset_0_0_0_5px_rgba(255,184,106,1)]';
     case 'working':
+    case 'none':
       return '';
   }
 };
@@ -96,6 +106,8 @@ export const paneStateLabel = (state: PaneState): string => {
       return '完了（未確認）';
     case 'idle':
       return '待機';
+    case 'none':
+      return '';
   }
 };
 

@@ -49,6 +49,9 @@ pub struct SessionUsage {
     pub cpu_percent: f32,
     pub memory_bytes: u64,
     pub gpu_percent: f32,
+    /// ツリーに AI エージェント（Claude Code）のプロセスがいるか。
+    /// いないターミナルは画面側で状態色を出さない（RDD.md 12.7章）
+    pub agent: bool,
 }
 
 /// RDD.md 17章: リソース使用量の一式
