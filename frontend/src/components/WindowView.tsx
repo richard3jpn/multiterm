@@ -10,6 +10,8 @@ interface WindowViewProps {
   readonly termWindow: TermWindow;
   /** Alt+数字の序数（全ウィンドウ通し）。10個目以降は含まれない（RDD 14.5章） */
   readonly ordinals: ReadonlyMap<string, number>;
+  /** AI エージェントが動いているセッション。これ以外は状態色を出さない（RDD 12.7章） */
+  readonly agentSessionIds: ReadonlySet<string>;
   /** 表示中のウィンドウか。非表示でもDOMには残す（RDD 14章） */
   readonly visible: boolean;
   readonly sessions: readonly Session[];
@@ -36,6 +38,7 @@ interface WindowViewProps {
 export function WindowView({
   termWindow,
   ordinals,
+  agentSessionIds,
   visible,
   sessions,
   shells,
@@ -59,6 +62,7 @@ export function WindowView({
         shellLabel={resolveShellLabel(session.shell, shells)}
         shells={shells}
         index={ordinals.get(sessionId) ?? null}
+        hasAgent={agentSessionIds.has(sessionId)}
         // 隠れているウィンドウの端末にはフォーカスを渡さない。表示に戻った時点で
         // false→true と変わり、フォーカス移動のEffectが走る
         active={visible && sessionId === termWindow.activeSessionId}

@@ -32,6 +32,8 @@ interface TerminalPanelProps {
   readonly shells: readonly ShellInfo[];
   /** Alt+数字で移動する際の序数（1〜9）。10番目以降・対象外は null（RDD 9.6章） */
   readonly index: number | null;
+  /** AI エージェントが動いているか。いなければ状態色とラベルを出さない（RDD 12.7章） */
+  readonly hasAgent: boolean;
   /** アクティブ（フォーカス対象）端末か（RDD 9.6章） */
   readonly active: boolean;
   /**
@@ -116,6 +118,7 @@ export function TerminalPanel({
   shellLabel,
   shells,
   index,
+  hasAgent,
   active,
   visible,
   onActivate,
@@ -374,6 +377,9 @@ export function TerminalPanel({
     );
   };
 
+  // 状態色は AI エージェントが動いているときだけ付ける。普通のシェルは切断時と同じ無彩色
+  const colored = connected && hasAgent;
+
   return (
     <div
       onMouseDown={() => onActivate(session.id)}
@@ -398,7 +404,7 @@ export function TerminalPanel({
         onMove(dragged, session.id, positionFromEvent(event));
       }}
       className={`relative flex h-full w-full min-h-0 min-w-0 flex-col overflow-hidden rounded-md border-4 transition-colors ${
-        connected ? statusFrameClasses(status) : 'border-gray-500 shadow-none'
+        colored ? statusFrameClasses(status) : 'border-gray-500 shadow-none'
       } ${active ? 'ring-2 ring-primary ring-offset-1 ring-offset-background' : ''}`}
     >
       {dropPosition !== null && (
@@ -418,7 +424,7 @@ export function TerminalPanel({
         title="ドラッグして配置を変更"
         className={`flex shrink-0 items-center gap-2 border-b px-2 py-1 transition-colors ${
           editing ? '' : 'cursor-grab active:cursor-grabbing'
-        } ${connected ? statusHeaderClasses(status) : 'bg-muted/50'}`}
+        } ${colored ? statusHeaderClasses(status) : 'bg-muted/50'}`}
       >
         {index !== null && (
           <span
@@ -432,7 +438,7 @@ export function TerminalPanel({
           </span>
         )}
         <span
-          className={`inline-block size-2 rounded-full ${connected ? statusDotClasses(status) : 'bg-gray-500'}`}
+          className={`inline-block size-2 rounded-full ${colored ? statusDotClasses(status) : 'bg-gray-500'}`}
         />
         {/* keyを分けないと、Preactが入力欄と表示ボタンの子要素を再利用して壊す */}
         {editing ? (
@@ -492,7 +498,7 @@ export function TerminalPanel({
           {shellLabel}
         </span>
         <span className="shrink-0 whitespace-nowrap text-xs text-muted-foreground">
-          {connected ? statusLabel(status) : '切断'}
+          {connected ? (hasAgent ? statusLabel(status) : '') : '切断'}
         </span>
         <div className="ml-auto flex items-center gap-1">
           <SplitControls

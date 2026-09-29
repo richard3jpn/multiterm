@@ -414,6 +414,10 @@ export function Workspace() {
   const digitOrdinals = buildDigitOrdinals(windows);
   // セッションIDから使用量を引けるようにする（RDD 17章）。未取得・終了直後は undefined
   const usageBySession = new Map(metrics?.sessions.map((usage) => [usage.sessionId, usage]) ?? []);
+  // AI エージェントが動いているセッション。これ以外は状態色を出さない（RDD 12.7章）
+  const agentSessionIds = new Set(
+    metrics?.sessions.filter((usage) => usage.agent).map((usage) => usage.sessionId) ?? [],
+  );
   const sidebarGroups: SidebarGroup[] = windows.map((termWindow, windowOrder) => {
     const ids = termWindow.layout === null ? [] : collectSessionIds(termWindow.layout);
     const isActiveWindow = termWindow.id === activeWindowId;
@@ -426,7 +430,11 @@ export function Workspace() {
           sessionId,
           title: session.title,
           shellLabel: resolveShellLabel(session.shell, shells),
-          state: resolvePaneState(status, unseenDone.includes(sessionId)),
+          state: resolvePaneState(
+            status,
+            unseenDone.includes(sessionId),
+            agentSessionIds.has(sessionId),
+          ),
           index: digitOrdinals.get(sessionId) ?? null,
           usage: usageBySession.get(sessionId) ?? null,
         },
@@ -598,6 +606,7 @@ export function Workspace() {
                 <WindowView
                   termWindow={termWindow}
                   ordinals={digitOrdinals}
+                  agentSessionIds={agentSessionIds}
                   visible={termWindow.id === activeWindowId}
                   sessions={sessions}
                   shells={shells}

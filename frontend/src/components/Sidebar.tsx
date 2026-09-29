@@ -226,7 +226,7 @@ export function Sidebar({
               key="row"
               type="button"
               className="flex min-w-0 flex-1 items-center gap-2 text-left"
-              title={`${item.title}（${item.shellLabel}） — ${paneStateLabel(item.state)}／ダブルクリックで名前を変更／ドラッグしてウィンドウへ移動`}
+              title={`${[`${item.title}（${item.shellLabel}）`, paneStateLabel(item.state)].filter(Boolean).join(' — ')}／ダブルクリックで名前を変更／ドラッグしてウィンドウへ移動`}
               aria-current={active ? 'true' : undefined}
               onClick={() => onSelect(item.sessionId)}
               // mousedownで開くと後続のmouseup/clickが元のボタン位置に届いて
@@ -245,7 +245,8 @@ export function Sidebar({
               <span className="min-w-0 flex-1">
                 <span className="block truncate text-[0.92em] font-medium">{item.title}</span>
                 <span className="block truncate text-[0.77em] text-muted-foreground">
-                  {paneStateLabel(item.state)} · {item.shellLabel}
+                  {/* AI がいないターミナルは状態ラベルが空なので、区切りごと出さない */}
+                  {[paneStateLabel(item.state), item.shellLabel].filter(Boolean).join(' · ')}
                 </span>
                 {/* 重いターミナルを名指しできるようにする（RDD 17章） */}
                 {item.usage !== null && (
@@ -330,7 +331,7 @@ export function Sidebar({
           key="window-row"
           type="button"
           className="flex min-w-0 flex-1 items-center gap-2 text-left"
-          title={`${group.title} — ${paneStateLabel(group.state)}／ダブルクリックで名前を変更`}
+          title={`${[group.title, paneStateLabel(group.state)].filter(Boolean).join(' — ')}／ダブルクリックで名前を変更`}
           aria-current={group.active ? 'true' : undefined}
           onClick={() => onSelectWindow(group.windowId)}
           onDblClick={() => startWindowEdit(group)}
